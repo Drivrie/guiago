@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+
+    <!-- iOS PWA Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="GuiAgo" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- Theme -->
+    <meta name="theme-color" content="#F97316" />
+    <meta name="msapplication-TileColor" content="#F97316" />
+
+    <!-- SEO -->
+    <meta name="description" content="GuiAgo - Tu guía turística virtual de bolsillo. Explora ciudades con rutas personalizadas, audio guiado y navegación paso a paso." />
+    <meta name="keywords" content="guía turística, turismo, rutas, monumentos, historia, gastronomía" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="GuiAgo - Guía Turística Virtual" />
+    <meta property="og:description" content="Tu guía turística virtual de bolsillo" />
+
+    <!-- Apple Touch Icons -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
+    <title>GuiAgo - Guía Turística Virtual</title>
+
+    <style>
+      /* Prevent flash of unstyled content */
+      body {
+        background-color: #FFF8F0;
+        margin: 0;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+      }
+      #root {
+        min-height: 100vh;
+        min-height: -webkit-fill-available;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
