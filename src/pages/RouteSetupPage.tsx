@@ -18,7 +18,8 @@ export function RouteSetupPage() {
   const navigate = useNavigate()
   const {
     language, selectedCity, setCity, selectedRouteType, setRouteType,
-    selectedDuration, setDuration, setPOIs, setRoute, setLoading, setError, isLoading
+    selectedDuration, setDuration, setPOIs, setRoute, setLoading, setError, isLoading,
+    loadingMessage, error
   } = useAppStore()
 
   const [cityImage, setCityImage] = useState<string | null>(null)
@@ -60,6 +61,8 @@ export function RouteSetupPage() {
         setError(language === 'es'
           ? 'No se encontraron lugares de este tipo en la ciudad. Prueba otra categoría.'
           : 'No places of this type found in the city. Try another category.')
+        setGeneratingRoute(false)
+        setLoading(false)
         return
       }
 
@@ -133,7 +136,7 @@ export function RouteSetupPage() {
 
   return (
     <div className="min-h-screen bg-stone-50 safe-top">
-      {isLoading && <LoadingSpinner fullScreen message={useAppStore.getState().loadingMessage} />}
+      {isLoading && <LoadingSpinner fullScreen message={loadingMessage} />}
 
       {/* City hero */}
       <div className="relative h-52 bg-stone-800 overflow-hidden">
@@ -161,6 +164,17 @@ export function RouteSetupPage() {
       </div>
 
       <div className="px-5 py-6 pb-32">
+        {/* Error display */}
+        {error && (
+          <div className="mb-4 bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3">
+            <span className="text-xl flex-shrink-0">⚠️</span>
+            <div className="flex-1">
+              <p className="text-red-700 text-sm font-medium">{error}</p>
+            </div>
+            <button onClick={() => setError(null)} className="text-red-400 text-lg leading-none flex-shrink-0">×</button>
+          </div>
+        )}
+
         {/* Step 1: Route type */}
         <div className="mb-6">
           <h2 className="text-xl font-bold text-stone-800 mb-1">

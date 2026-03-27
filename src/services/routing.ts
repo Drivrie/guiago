@@ -87,7 +87,9 @@ export async function getRoute(waypoints: [number, number][]): Promise<RouteResu
     const coords = waypoints.map(([lat, lon]) => `${lon},${lat}`).join(';')
     const url = `${OSRM_BASE}/${coords}?steps=true&geometries=geojson&overview=full&annotations=false`
 
-    const response = await fetch(url)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 8000)
+    const response = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout))
     if (!response.ok) {
       throw new Error(`OSRM error: ${response.status}`)
     }

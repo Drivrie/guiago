@@ -117,9 +117,7 @@ function buildOverpassQuery(city: City, routeType: RouteType): string {
 (
   ${tagFilters}
 );
-out body;
->;
-out skel qt;`
+out center;`
 }
 
 function elementToCategory(element: OverpassElement, routeType: RouteType): string {
