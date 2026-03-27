@@ -181,6 +181,36 @@ function generateFallbackDescription(name: string, lang: Language): string {
   return `${name} es un punto de interés destacado en esta zona. Visítalo para descubrir su historia y significado.`
 }
 
+// Generate a brief audio announcement when starting to walk to next POI
+export function generateWalkingScript(targetName: string, distanceMeters: number, lang: Language): string {
+  const dist = distanceMeters > 50
+    ? (distanceMeters < 1000
+      ? `${Math.round(distanceMeters / 10) * 10} metros`
+      : `${(distanceMeters / 1000).toFixed(1)} kilómetros`)
+    : ''
+
+  if (lang === 'en') {
+    const phrases = [
+      `Right then, let's head over to ${targetName}. ${dist ? `It's about ${dist} from here.` : ''} Follow the directions on screen.`,
+      `Next up: ${targetName}. ${dist ? `Around ${dist} on foot.` : ''} I'll guide you there.`,
+      `Time to walk to ${targetName}. ${dist ? `About ${dist} away.` : ''} Let's go!`,
+    ]
+    let hash = 0
+    for (let i = 0; i < targetName.length; i++) hash = (hash * 31 + targetName.charCodeAt(i)) >>> 0
+    return phrases[hash % phrases.length]
+  }
+
+  const phrases = [
+    `Venga, ahora nos vamos hacia ${targetName}. ${dist ? `Está a unos ${dist}.` : ''} Sigue las indicaciones de la pantalla.`,
+    `Siguiente parada: ${targetName}. ${dist ? `A unos ${dist} caminando.` : ''} ¡Vamos!`,
+    `Ahora nos dirigimos a ${targetName}. ${dist ? `Hay unos ${dist} por delante.` : ''} Sigue por donde te indico.`,
+    `¡Perfecto! Próxima parada: ${targetName}. ${dist ? `A unos ${dist} de aquí.` : ''} ¡En marcha!`,
+  ]
+  let hash = 0
+  for (let i = 0; i < targetName.length; i++) hash = (hash * 31 + targetName.charCodeAt(i)) >>> 0
+  return phrases[hash % phrases.length]
+}
+
 // Pick a phrase deterministically based on name (so same POI always gets same intro)
 function pickPhrase(arr: string[], name: string): string {
   let hash = 0
@@ -205,49 +235,57 @@ export function generateAudioScript(
 
   if (lang === 'en') {
     const openings = [
-      `Right, you've made it! In front of you is ${poi.name}.`,
-      `Here we are at ${poi.name}. Pay attention, this place has a great story.`,
-      `Welcome! You've just arrived at ${poi.name}, and trust me, it's worth it.`,
-      `This is ${poi.name}. One of the most interesting stops on our route.`,
+      `Right, you've made it! In front of you... is ${poi.name}. Take a second to look around.`,
+      `Here we are at ${poi.name}. Pay attention, because this place has quite a story.`,
+      `Welcome! You've just arrived at ${poi.name}... and trust me, it's worth it.`,
+      `This is ${poi.name}. One of the most interesting stops on our route today.`,
+      `So, here you are at ${poi.name}. Have a good look — there's more to this place than meets the eye.`,
     ]
-    const connectors = ['Did you know that', 'Interestingly,', 'Worth mentioning:', 'Fun fact:']
+    const connectors = [
+      'And did you know that', 'Interestingly enough,', 'Here\'s something worth knowing:',
+      'This is the fun part —', 'What many people don\'t realise is that'
+    ]
     const closings = [
-      `Take a moment to look around before we move on!`,
-      `Have a good look — there's a lot to take in here.`,
-      `Don't rush — this one deserves your full attention.`,
+      `Take a good look around before we move on. No rush!`,
+      `Have a proper look — there's a lot to take in here. When you're ready, we'll head to the next stop.`,
+      `Don't rush this one. It deserves your full attention. Just let me know when you're ready to continue.`,
+      `Spend a moment here and soak it all in. We'll move on whenever you're ready.`,
     ]
 
     let script = pickPhrase(openings, poi.name) + ' '
     if (mainContent) script += mainContent + ' '
-    if (extraContent) script += pickPhrase(connectors, poi.name + 'x') + ' ' + extraContent + ' '
+    if (extraContent) script += pickPhrase(connectors, poi.name + 'x') + ' ' + extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
     script += pickPhrase(closings, poi.name + 'z')
     return script
   }
 
-  // Spanish — conversational, informal, warm tone
+  // Spanish — conversational, informal, warm tone, with natural pauses via commas and ellipsis
   const openings = [
-    `¡Pues ya estás aquí! Tienes delante ${poi.name}.`,
-    `¡Perfecto, has llegado! Esto que ves es ${poi.name}, y tiene mucha historia.`,
-    `Bien, este es el sitio. Estás en ${poi.name}. Préstale atención porque merece la pena.`,
-    `¡Aquí está! Bienvenido a ${poi.name}. Uno de los lugares más especiales de esta ruta.`,
-    `Ya estás en ${poi.name}. Y mira que hay cosas interesantes que contarte de aquí.`,
+    `¡Pues ya estás aquí! Tienes delante... ${poi.name}. Tómate un momento para observarlo bien.`,
+    `¡Perfecto, has llegado! Esto que ves es ${poi.name}, y... tiene mucha historia que contarte.`,
+    `Bien, este es el sitio. Estás en ${poi.name}. Fíjate bien en lo que te rodea, porque merece la pena.`,
+    `¡Aquí está! Bienvenido a ${poi.name}. Uno de los lugares más especiales de esta ruta, y eso es decir mucho.`,
+    `Ya estás en ${poi.name}. Y mira, hay cosas muy interesantes que contarte de este sitio.`,
+    `¡Venga, ya llegaste! Este lugar que tienes delante es ${poi.name}. Échale un buen vistazo primero.`,
   ]
   const connectors = [
-    '¿Sabías que', 'Por cierto,', 'Lo curioso del asunto es que',
-    'Hay algo que llama la atención:', 'Un dato que pocos conocen:'
+    '¿Sabías que', 'Pues mira, resulta que', 'Lo que tiene de especial es que',
+    'Hay algo que muy poca gente sabe:', 'Y lo curioso del asunto es que',
+    'Por cierto, algo que llama la atención:'
   ]
   const closings = [
-    `¡Echa un buen vistazo y tómate el tiempo que necesites antes de seguir!`,
-    `No te vayas sin explorar bien los detalles. ¡Hay mucho que ver aquí!`,
-    `Quédate un momento, que este sitio lo merece. Cuando estés listo, seguimos.`,
-    `¡Mira bien a tu alrededor! Y cuando quieras, continuamos con la siguiente parada.`,
+    `¡Echa un buen vistazo y tómate el tiempo que necesites! Cuando estés listo, seguimos.`,
+    `No te vayas sin explorar bien los detalles... Hay mucho que ver aquí. Avisa cuando quieras continuar.`,
+    `Quédate un momento, que este sitio lo merece. Sin prisa. Cuando estés listo, nos vamos a la siguiente parada.`,
+    `¡Mira bien a tu alrededor! Y cuando quieras, continuamos con lo que viene.`,
+    `Bueno, tómate tu tiempo aquí. Hay mucho que absorber. Cuando estés preparado, seguimos adelante.`,
   ]
 
   let script = pickPhrase(openings, poi.name) + ' '
   if (mainContent) script += mainContent + ' '
   if (extraContent) {
-    script += pickPhrase(connectors, poi.name + 'x') + ' '
-    // Remove leading "que" issues if connector ends mid-sentence
+    const connector = pickPhrase(connectors, poi.name + 'x')
+    script += connector + ' '
     script += extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
   }
   script += pickPhrase(closings, poi.name + 'z')

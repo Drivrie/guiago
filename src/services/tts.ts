@@ -91,8 +91,14 @@ function speakChunks(
       isActive = false
       return
     }
-    // Small pause between chunks (50ms) — prevents iOS silent-chunk bug
-    setTimeout(() => speakChunks(chunks, index + 1, lang, rate, onEnd, onStart), 50)
+    // Variable pause: sentence end = 400ms, comma = 150ms, else 80ms
+    const last = chunks[index].trimEnd().slice(-1)
+    const delay = (last === '.' || last === '!' || last === '?') ? 400
+      : (last === '…' || chunks[index].trimEnd().endsWith('...')) ? 600
+      : (last === ':' || last === ';') ? 200
+      : (last === ',') ? 150
+      : 80
+    setTimeout(() => speakChunks(chunks, index + 1, lang, rate, onEnd, onStart), delay)
   }
 
   utterance.onerror = (e) => {

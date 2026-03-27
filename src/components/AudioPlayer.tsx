@@ -1,30 +1,49 @@
-import { useState, useEffect } from 'react'
-import { speak, stop, pause, resume, isSpeaking, isPaused, setRate, getRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
+import { useState, useEffect, useRef } from 'react'
+import { speak, stop, pause, resume, isSpeaking, isPaused, setRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
 import { useAppStore } from '../stores/appStore'
 
 interface AudioPlayerProps {
   text: string
   poiName: string
+  autoPlay?: boolean
   onPlayStart?: () => void
   onPlayEnd?: () => void
 }
 
-export function AudioPlayer({ text, poiName, onPlayStart, onPlayEnd }: AudioPlayerProps) {
+export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPlayEnd }: AudioPlayerProps) {
   const { language, audioRate, setAudioRate, setAudioPlaying } = useAppStore()
   const [playing, setPlaying] = useState(false)
   const [paused, setPaused] = useState(false)
   const [supported] = useState(() => 'speechSynthesis' in window)
+  const hasAutoPlayed = useRef(false)
 
   useEffect(() => {
     return () => { stop() }
   }, [])
 
-  // Stop when text changes
+  // Stop when text changes, reset auto-play flag
   useEffect(() => {
     stop()
     setPlaying(false)
     setPaused(false)
+    hasAutoPlayed.current = false
   }, [text])
+
+  // Auto-play when text is ready and autoPlay is true
+  useEffect(() => {
+    if (!autoPlay || !text || !supported || hasAutoPlayed.current) return
+    hasAutoPlayed.current = true
+    // Small delay to let voices load on iOS
+    const timer = setTimeout(() => {
+      setRate(audioRate)
+      const prepared = prepareTextForSpeech(text, language)
+      speak(prepared, language === 'es' ? 'es-ES' : 'en-US', {
+        onStart: () => { setPlaying(true); setPaused(false); setAudioPlaying(true); onPlayStart?.() },
+        onEnd: () => { setPlaying(false); setPaused(false); setAudioPlaying(false); onPlayEnd?.() }
+      })
+    }, 900)
+    return () => clearTimeout(timer)
+  }, [text, autoPlay, supported])
 
   function handlePlay() {
     if (!supported) return
@@ -36,21 +55,12 @@ export function AudioPlayer({ text, poiName, onPlayStart, onPlayEnd }: AudioPlay
       return
     }
 
+    hasAutoPlayed.current = true // prevent double auto-play if user manually presses play
     setRate(audioRate)
     const prepared = prepareTextForSpeech(text, language)
     speak(prepared, language === 'es' ? 'es-ES' : 'en-US', {
-      onStart: () => {
-        setPlaying(true)
-        setPaused(false)
-        setAudioPlaying(true)
-        onPlayStart?.()
-      },
-      onEnd: () => {
-        setPlaying(false)
-        setPaused(false)
-        setAudioPlaying(false)
-        onPlayEnd?.()
-      }
+      onStart: () => { setPlaying(true); setPaused(false); setAudioPlaying(true); onPlayStart?.() },
+      onEnd: () => { setPlaying(false); setPaused(false); setAudioPlaying(false); onPlayEnd?.() }
     })
   }
 
