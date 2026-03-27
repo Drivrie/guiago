@@ -54,14 +54,22 @@ export function POIDetailPage() {
 
   return (
     <div className="min-h-screen bg-stone-50 safe-top">
-      {/* Map header */}
+      {/* Header: image if available, otherwise map */}
       <div className="relative h-56">
-        <MapView
-          pois={[poi]}
-          currentPOIIndex={0}
-          className="w-full h-full"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+        {poi.imageUrl ? (
+          <img
+            src={poi.imageUrl}
+            alt={poi.name}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <MapView
+            pois={[poi]}
+            currentPOIIndex={0}
+            className="w-full h-full"
+          />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
 
         <button
           onClick={() => navigate(-1)}

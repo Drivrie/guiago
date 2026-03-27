@@ -212,24 +212,57 @@ export function ActiveRoutePage() {
 
         {/* Current POI */}
         {currentPOI && (
-          <div className="px-4 pb-2 flex-shrink-0">
-            <div className="flex items-start gap-3">
-              <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center flex-shrink-0">
-                <span className="text-2xl font-black text-orange-500">{currentPOIIndex + 1}</span>
+          <div className="flex-shrink-0">
+            {/* POI image */}
+            {currentPOI.imageUrl && (
+              <div className="relative h-36 overflow-hidden">
+                <img
+                  src={currentPOI.imageUrl}
+                  alt={currentPOI.name}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between">
+                  <div>
+                    <h2 className="font-black text-white text-lg leading-tight">{currentPOI.name}</h2>
+                    <p className="text-white/70 text-xs capitalize">{currentPOI.category}</p>
+                  </div>
+                  <button
+                    onClick={() => navigate(`/poi/${encodeURIComponent(currentPOI.id)}`)}
+                    className="flex-shrink-0 w-8 h-8 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center"
+                  >
+                    <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="absolute top-3 left-4 w-8 h-8 bg-orange-500 rounded-xl flex items-center justify-center shadow">
+                  <span className="text-white font-black text-sm">{currentPOIIndex + 1}</span>
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="font-black text-stone-900 text-xl leading-tight">{currentPOI.name}</h2>
-                <p className="text-stone-400 text-sm capitalize">{currentPOI.category}</p>
+            )}
+            {/* Fallback: no image */}
+            {!currentPOI.imageUrl && (
+              <div className="px-4 pb-2">
+                <div className="flex items-start gap-3">
+                  <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center flex-shrink-0">
+                    <span className="text-2xl font-black text-orange-500">{currentPOIIndex + 1}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h2 className="font-black text-stone-900 text-xl leading-tight">{currentPOI.name}</h2>
+                    <p className="text-stone-400 text-sm capitalize">{currentPOI.category}</p>
+                  </div>
+                  <button
+                    onClick={() => navigate(`/poi/${encodeURIComponent(currentPOI.id)}`)}
+                    className="flex-shrink-0 w-9 h-9 bg-stone-100 rounded-xl flex items-center justify-center"
+                  >
+                    <svg className="w-4 h-4 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => navigate(`/poi/${encodeURIComponent(currentPOI.id)}`)}
-                className="flex-shrink-0 w-9 h-9 bg-stone-100 rounded-xl flex items-center justify-center"
-              >
-                <svg className="w-4 h-4 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </button>
-            </div>
+            )}
           </div>
         )}
 

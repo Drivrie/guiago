@@ -181,28 +181,75 @@ function generateFallbackDescription(name: string, lang: Language): string {
   return `${name} es un punto de interés destacado en esta zona. Visítalo para descubrir su historia y significado.`
 }
 
-export function generateAudioScript(poi: { name: string; category: string; description?: string }, lang: Language): string {
+// Pick a phrase deterministically based on name (so same POI always gets same intro)
+function pickPhrase(arr: string[], name: string): string {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
+  return arr[hash % arr.length]
+}
+
+export function generateAudioScript(
+  poi: { name: string; category: string; description?: string },
+  lang: Language
+): string {
   const desc = poi.description || ''
 
+  // Extract meaningful sentences (skip very short ones)
+  const sentences = desc
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 30)
+
+  const mainContent = sentences.slice(0, 3).join(' ')
+  const extraContent = sentences.slice(3, 5).join(' ')
+
   if (lang === 'en') {
-    let script = `Welcome to ${poi.name}. `
-    if (poi.category) script += `This is a ${poi.category}. `
-    if (desc) {
-      // Take first 2-3 sentences for audio
-      const sentences = desc.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 3)
-      script += sentences.join('. ') + '. '
-    }
-    script += `Take your time to explore and enjoy this wonderful place!`
+    const openings = [
+      `Right, you've made it! In front of you is ${poi.name}.`,
+      `Here we are at ${poi.name}. Pay attention, this place has a great story.`,
+      `Welcome! You've just arrived at ${poi.name}, and trust me, it's worth it.`,
+      `This is ${poi.name}. One of the most interesting stops on our route.`,
+    ]
+    const connectors = ['Did you know that', 'Interestingly,', 'Worth mentioning:', 'Fun fact:']
+    const closings = [
+      `Take a moment to look around before we move on!`,
+      `Have a good look — there's a lot to take in here.`,
+      `Don't rush — this one deserves your full attention.`,
+    ]
+
+    let script = pickPhrase(openings, poi.name) + ' '
+    if (mainContent) script += mainContent + ' '
+    if (extraContent) script += pickPhrase(connectors, poi.name + 'x') + ' ' + extraContent + ' '
+    script += pickPhrase(closings, poi.name + 'z')
     return script
   }
 
-  // Spanish (default)
-  let script = `Bienvenido a ${poi.name}. `
-  if (poi.category) script += `Este es un ${poi.category}. `
-  if (desc) {
-    const sentences = desc.split(/[.!?]+/).filter(s => s.trim().length > 20).slice(0, 3)
-    script += sentences.join('. ') + '. '
+  // Spanish — conversational, informal, warm tone
+  const openings = [
+    `¡Pues ya estás aquí! Tienes delante ${poi.name}.`,
+    `¡Perfecto, has llegado! Esto que ves es ${poi.name}, y tiene mucha historia.`,
+    `Bien, este es el sitio. Estás en ${poi.name}. Préstale atención porque merece la pena.`,
+    `¡Aquí está! Bienvenido a ${poi.name}. Uno de los lugares más especiales de esta ruta.`,
+    `Ya estás en ${poi.name}. Y mira que hay cosas interesantes que contarte de aquí.`,
+  ]
+  const connectors = [
+    '¿Sabías que', 'Por cierto,', 'Lo curioso del asunto es que',
+    'Hay algo que llama la atención:', 'Un dato que pocos conocen:'
+  ]
+  const closings = [
+    `¡Echa un buen vistazo y tómate el tiempo que necesites antes de seguir!`,
+    `No te vayas sin explorar bien los detalles. ¡Hay mucho que ver aquí!`,
+    `Quédate un momento, que este sitio lo merece. Cuando estés listo, seguimos.`,
+    `¡Mira bien a tu alrededor! Y cuando quieras, continuamos con la siguiente parada.`,
+  ]
+
+  let script = pickPhrase(openings, poi.name) + ' '
+  if (mainContent) script += mainContent + ' '
+  if (extraContent) {
+    script += pickPhrase(connectors, poi.name + 'x') + ' '
+    // Remove leading "que" issues if connector ends mid-sentence
+    script += extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
   }
-  script += `¡Tómate tu tiempo para explorar y disfrutar de este lugar tan especial!`
+  script += pickPhrase(closings, poi.name + 'z')
   return script
 }

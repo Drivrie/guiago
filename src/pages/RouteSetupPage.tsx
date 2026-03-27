@@ -14,6 +14,16 @@ import { orderPOIsOptimally } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
+// Fallback order: if requested type yields no POIs, try these alternatives
+const ROUTE_FALLBACKS: Record<RouteType, RouteType[]> = {
+  monumental: ['arquitectura', 'curiosidades', 'naturaleza'],
+  historia_negra: ['curiosidades', 'monumental', 'arquitectura'],
+  curiosidades: ['monumental', 'historia_negra', 'arquitectura'],
+  gastronomia: ['curiosidades', 'monumental', 'naturaleza'],
+  arquitectura: ['monumental', 'curiosidades', 'historia_negra'],
+  naturaleza: ['curiosidades', 'monumental', 'gastronomia'],
+}
+
 const POPULAR_ROUTE_SUGGESTIONS = [
   { icon: '🏛️', type: 'monumental' as RouteType, duration: 120 as RouteDuration, label_es: 'Tour monumental 2h', label_en: '2h monuments tour' },
   { icon: '💀', type: 'historia_negra' as RouteType, duration: 120 as RouteDuration, label_es: 'Historia oscura 2h', label_en: '2h dark history' },
@@ -34,6 +44,7 @@ export function RouteSetupPage() {
   const [cityDesc, setCityDesc] = useState<string>('')
   const [generatingRoute, setGeneratingRoute] = useState(false)
   const [step, setStep] = useState<'type' | 'duration'>('type')
+  const [fallbackInfo, setFallbackInfo] = useState<{ requested: RouteType; found: RouteType } | null>(null)
 
   // Load city if needed
   useEffect(() => {
@@ -59,31 +70,53 @@ export function RouteSetupPage() {
     if (!selectedCity || !selectedRouteType || !selectedDuration) return
 
     setGeneratingRoute(true)
+    setFallbackInfo(null)
     const maxPOIs = Math.floor(selectedDuration / 15) // ~15 min per POI
     setLoading(true, language === 'es' ? 'Buscando lugares de interés...' : 'Finding points of interest...')
 
     try {
-      // 1. Try Wikipedia geosearch first (reliable)
-      let pois = await searchPOIsWikipedia(selectedCity, selectedRouteType, maxPOIs, language)
+      // Helper: search Wikipedia + Overpass for a given route type
+      async function searchForType(rType: RouteType): Promise<POI[]> {
+        let results = await searchPOIsWikipedia(selectedCity!, rType, maxPOIs, language)
+        if (results.length < 3) {
+          setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
+          const overpassPOIs = await getPOIsByCity(selectedCity!, rType, selectedDuration!)
+          const existingNames = new Set(results.map(p => p.name.toLowerCase()))
+          for (const op of overpassPOIs) {
+            if (!existingNames.has(op.name.toLowerCase())) {
+              results.push(op)
+              existingNames.add(op.name.toLowerCase())
+            }
+          }
+        }
+        return results
+      }
 
-      // Fallback to Overpass if Wikipedia doesn't return enough
+      // 1. Try requested route type first
+      let pois = await searchForType(selectedRouteType)
+      let usedRouteType = selectedRouteType
+
+      // 2. If not enough POIs, try fallback types
       if (pois.length < 3) {
-        setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
-        const overpassPOIs = await getPOIsByCity(selectedCity, selectedRouteType, selectedDuration)
-        // Merge avoiding duplicates by name
-        const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
-        for (const op of overpassPOIs) {
-          if (!existingNames.has(op.name.toLowerCase())) {
-            pois.push(op)
-            existingNames.add(op.name.toLowerCase())
+        const fallbacks = ROUTE_FALLBACKS[selectedRouteType] || []
+        for (const fbType of fallbacks) {
+          setLoading(true, language === 'es'
+            ? `Buscando alternativas de tipo "${ROUTE_TYPE_INFO.find(r => r.id === fbType)?.[language === 'es' ? 'labelEs' : 'labelEn'] || fbType}"...`
+            : `Searching for "${fbType}" alternatives...`)
+          const fbPOIs = await searchForType(fbType)
+          if (fbPOIs.length >= 3) {
+            pois = fbPOIs
+            usedRouteType = fbType
+            setFallbackInfo({ requested: selectedRouteType, found: fbType })
+            break
           }
         }
       }
 
       if (pois.length === 0) {
         setError(language === 'es'
-          ? 'No se encontraron lugares de este tipo en la ciudad. Prueba otra categoría.'
-          : 'No places of this type found in the city. Try another category.')
+          ? 'No se encontraron lugares de interés en esta ciudad. Prueba con otra ciudad o tipo de ruta.'
+          : 'No points of interest found in this city. Try another city or route type.')
         setGeneratingRoute(false)
         setLoading(false)
         return
@@ -187,6 +220,24 @@ export function RouteSetupPage() {
       </div>
 
       <div className="px-5 py-6 pb-32">
+        {/* Fallback route notice */}
+        {fallbackInfo && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
+            <span className="text-xl flex-shrink-0">💡</span>
+            <div className="flex-1">
+              <p className="text-amber-800 text-sm font-semibold">
+                {language === 'es' ? 'No encontramos exactamente lo que pediste' : "We couldn't find exactly what you requested"}
+              </p>
+              <p className="text-amber-700 text-xs mt-0.5">
+                {language === 'es'
+                  ? `No hay suficientes puntos de tipo "${ROUTE_TYPE_INFO.find(r => r.id === fallbackInfo.requested)?.[language === 'es' ? 'labelEs' : 'labelEn']}" en esta ciudad. Te proponemos la ruta más similar disponible: "${ROUTE_TYPE_INFO.find(r => r.id === fallbackInfo.found)?.[language === 'es' ? 'labelEs' : 'labelEn']}".`
+                  : `Not enough "${ROUTE_TYPE_INFO.find(r => r.id === fallbackInfo.requested)?.labelEn}" spots here. We're showing the closest available route: "${ROUTE_TYPE_INFO.find(r => r.id === fallbackInfo.found)?.labelEn}".`}
+              </p>
+            </div>
+            <button onClick={() => setFallbackInfo(null)} className="text-amber-400 text-lg leading-none flex-shrink-0">×</button>
+          </div>
+        )}
+
         {/* Error display */}
         {error && (
           <div className="mb-4 bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3">
