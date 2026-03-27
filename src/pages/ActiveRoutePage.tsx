@@ -4,6 +4,7 @@ import { MapView } from '../components/MapView'
 import { POICard } from '../components/POICard'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { OfflineDownload } from '../components/OfflineDownload'
+import { NavigationPanel } from '../components/NavigationPanel'
 import { BottomSheet } from '../components/ui/BottomSheet'
 import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
@@ -24,9 +25,16 @@ export function ActiveRoutePage() {
   const [showPOIList, setShowPOIList] = useState(false)
   const [showDownload, setShowDownload] = useState(false)
   const [panelExpanded, setPanelExpanded] = useState(false)
+  const [currentStepIndex, setCurrentStepIndex] = useState(0)
+  const [showNavPanel, setShowNavPanel] = useState(true)
 
   const currentPOI = pois[currentPOIIndex]
   const routeInfo = currentRoute ? ROUTE_TYPE_INFO.find(r => r.id === currentRoute.routeType) : null
+
+  const currentSegment = currentRoute?.segments?.[currentPOIIndex] ?? null
+  const navSteps = currentSegment?.steps ?? []
+  const currentNavStep = navSteps[currentStepIndex] ?? null
+  const nextNavStep = navSteps[currentStepIndex + 1] ?? null
 
   // Get user GPS location
   useEffect(() => {
@@ -63,6 +71,11 @@ export function ActiveRoutePage() {
       })
     })
   }, [currentPOI, language])
+
+  // Reset navigation step when POI changes
+  useEffect(() => {
+    setCurrentStepIndex(0)
+  }, [currentPOIIndex])
 
   // Start navigation on mount
   useEffect(() => {
@@ -147,6 +160,44 @@ export function ActiveRoutePage() {
             style={{ width: `${((currentPOIIndex + 1) / pois.length) * 100}%` }}
           />
         </div>
+
+        {/* Navigation overlay - shows step-by-step walking directions */}
+        {showNavPanel && currentNavStep && (
+          <div className="absolute top-2 left-2 right-2 z-10">
+            <NavigationPanel
+              currentStep={currentNavStep}
+              nextStep={nextNavStep ?? undefined}
+              remainingDistance={currentSegment?.distance}
+              remainingTime={currentSegment?.duration}
+            />
+            {/* Step buttons */}
+            <div className="flex gap-2 mt-1">
+              {currentStepIndex > 0 && (
+                <button
+                  onClick={() => setCurrentStepIndex(i => i - 1)}
+                  className="flex-1 bg-stone-800/90 text-white text-xs py-2 rounded-xl"
+                >
+                  ← Indicación anterior
+                </button>
+              )}
+              {currentStepIndex < navSteps.length - 1 && (
+                <button
+                  onClick={() => setCurrentStepIndex(i => i + 1)}
+                  className="flex-1 bg-stone-800/90 text-white text-xs py-2 rounded-xl"
+                >
+                  Siguiente indicación →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {/* Toggle nav panel button */}
+        <button
+          onClick={() => setShowNavPanel(v => !v)}
+          className="absolute top-2 right-2 z-20 w-9 h-9 bg-white rounded-xl shadow flex items-center justify-center text-stone-600"
+        >
+          {showNavPanel ? '🗺️' : '↑'}
+        </button>
       </div>
 
       {/* Bottom panel */}

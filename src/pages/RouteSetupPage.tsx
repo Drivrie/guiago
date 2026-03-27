@@ -8,10 +8,18 @@ import { useAppStore } from '../stores/appStore'
 import { getPOIsByCity } from '../services/overpass'
 import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
+import { searchPOIsWikipedia } from '../services/wikigeo'
 import { getRoute } from '../services/routing'
 import { orderPOIsOptimally } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
+
+const POPULAR_ROUTE_SUGGESTIONS = [
+  { icon: '🏛️', type: 'monumental' as RouteType, duration: 120 as RouteDuration, label_es: 'Tour monumental 2h', label_en: '2h monuments tour' },
+  { icon: '💀', type: 'historia_negra' as RouteType, duration: 120 as RouteDuration, label_es: 'Historia oscura 2h', label_en: '2h dark history' },
+  { icon: '🔍', type: 'curiosidades' as RouteType, duration: 60 as RouteDuration, label_es: 'Curiosidades 1h', label_en: '1h curiosities' },
+  { icon: '🏗️', type: 'arquitectura' as RouteType, duration: 180 as RouteDuration, label_es: 'Arquitectura 3h', label_en: '3h architecture' },
+]
 
 export function RouteSetupPage() {
   const { cityName } = useParams<{ cityName: string }>()
@@ -51,11 +59,26 @@ export function RouteSetupPage() {
     if (!selectedCity || !selectedRouteType || !selectedDuration) return
 
     setGeneratingRoute(true)
+    const maxPOIs = Math.floor(selectedDuration / 15) // ~15 min per POI
     setLoading(true, language === 'es' ? 'Buscando lugares de interés...' : 'Finding points of interest...')
 
     try {
-      // 1. Fetch POIs
-      let pois = await getPOIsByCity(selectedCity, selectedRouteType, selectedDuration)
+      // 1. Try Wikipedia geosearch first (reliable)
+      let pois = await searchPOIsWikipedia(selectedCity, selectedRouteType, maxPOIs, language)
+
+      // Fallback to Overpass if Wikipedia doesn't return enough
+      if (pois.length < 3) {
+        setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
+        const overpassPOIs = await getPOIsByCity(selectedCity, selectedRouteType, selectedDuration)
+        // Merge avoiding duplicates by name
+        const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
+        for (const op of overpassPOIs) {
+          if (!existingNames.has(op.name.toLowerCase())) {
+            pois.push(op)
+            existingNames.add(op.name.toLowerCase())
+          }
+        }
+      }
 
       if (pois.length === 0) {
         setError(language === 'es'
@@ -174,6 +197,33 @@ export function RouteSetupPage() {
             <button onClick={() => setError(null)} className="text-red-400 text-lg leading-none flex-shrink-0">×</button>
           </div>
         )}
+
+        {/* Sugerencias populares */}
+        <div className="mb-6">
+          <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider mb-3">
+            {language === 'es' ? 'Sugerencias populares' : 'Popular suggestions'}
+          </h2>
+          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+            {POPULAR_ROUTE_SUGGESTIONS.map(suggestion => (
+              <button
+                key={`${suggestion.type}-${suggestion.duration}`}
+                onClick={() => {
+                  setRouteType(suggestion.type)
+                  setDuration(suggestion.duration)
+                  setStep('duration')
+                }}
+                className={`flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium transition-all active:scale-95 ${
+                  selectedRouteType === suggestion.type && selectedDuration === suggestion.duration
+                    ? 'bg-orange-500 text-white border-orange-500'
+                    : 'bg-white text-stone-700 border-stone-200'
+                }`}
+              >
+                <span>{suggestion.icon}</span>
+                <span>{language === 'es' ? suggestion.label_es : suggestion.label_en}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Step 1: Route type */}
         <div className="mb-6">

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
 import { useAppStore } from '../stores/appStore'
+import { getCityCoords } from '../data/cityData'
 import type { City } from '../types'
 
 export function HomePage() {
@@ -104,13 +105,15 @@ export function HomePage() {
                 key={city.name}
                 onClick={() => {
                   // Quick navigate to a Spanish city
+                  const coords = getCityCoords(city.name) || { lat: 0, lon: 0 }
                   const c: City = {
                     id: city.name.toLowerCase(),
                     name: city.name,
                     displayName: `${city.name}, España`,
                     country: 'España',
                     countryCode: 'ES',
-                    lat: 0, lon: 0,
+                    lat: coords.lat,
+                    lon: coords.lon,
                     wikipediaTitle: city.name
                   }
                   setCity(c)
