@@ -1,8 +1,27 @@
 import type { RouteType, Language } from '../types'
 
-const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
-// Using the fastest/cheapest model for snappy UX
-const MODEL = 'claude-haiku-4-5-20251001'
+const MISTRAL_API = 'https://api.mistral.ai/v1/chat/completions'
+// open-mistral-nemo: free tier, 12B multilingual, best quality without cost
+const MODEL = 'open-mistral-nemo'
+
+// Built-in key from build environment — set VITE_MISTRAL_KEY in .env.local
+// Users of the deployed app don't need to do anything
+const ENV_KEY: string = (import.meta.env.VITE_MISTRAL_KEY as string) || ''
+
+/** Returns the effective API key: user override first, then built-in env key */
+export function getAIKey(userOverrideKey: string): string {
+  return userOverrideKey?.trim() || ENV_KEY
+}
+
+/** Returns true if any AI key is available (built-in or user-provided) */
+export function hasAIKey(userOverrideKey: string): boolean {
+  return Boolean(getAIKey(userOverrideKey))
+}
+
+/** Returns true if AI key is from the built-in env variable (transparent to user) */
+export function hasBuiltInKey(): boolean {
+  return Boolean(ENV_KEY)
+}
 
 export interface AIGeneratedPOI {
   name: string
@@ -51,33 +70,34 @@ const ROUTE_TYPE_DESC: Record<RouteType, { es: string; en: string }> = {
   },
 }
 
-async function callClaude(
+async function callMistral(
   system: string,
   user: string,
   apiKey: string,
   maxTokens = 1200
 ): Promise<string> {
-  const response = await fetch(ANTHROPIC_API, {
+  const response = await fetch(MISTRAL_API, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: MODEL,
       max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content: user }],
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
     }),
   })
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))
-    throw new Error((err as { error?: { message?: string } }).error?.message || `HTTP ${response.status}`)
+    throw new Error((err as { message?: string }).message || `HTTP ${response.status}`)
   }
-  const data = await response.json() as { content?: Array<{ text?: string }> }
-  return data.content?.[0]?.text?.trim() || ''
+  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+  return data.choices?.[0]?.message?.content?.trim() || ''
 }
 
 // Generate a Civitatis-quality curated route with AI
@@ -144,8 +164,10 @@ Exact JSON to return (no text outside the JSON):
   ]
 }`
 
+  const key = getAIKey(apiKey)
+  if (!key) return null
   try {
-    const text = await callClaude(system, user, apiKey, 1500)
+    const text = await callMistral(system, user, key, 1500)
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
     return JSON.parse(jsonMatch[0]) as AIRouteResult
@@ -203,19 +225,34 @@ Write a 180-230 word narration that:
 
 Return ONLY the narration, no quotes, no headings.`
 
+  const key = getAIKey(apiKey)
+  if (!key) return null
   try {
-    return await callClaude(system, user, apiKey, 600)
+    return await callMistral(system, user, key, 600)
   } catch (err) {
     console.error('AI audio script error:', err)
     return null
   }
 }
 
-// Validate that an API key works (cheap test call)
+// Validate that a Mistral API key works (cheap test call)
 export async function validateApiKey(apiKey: string): Promise<boolean> {
+  const key = getAIKey(apiKey)
+  if (!key) return false
   try {
-    await callClaude('Respond with: OK', 'Test', apiKey, 10)
-    return true
+    const resp = await fetch(MISTRAL_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 5,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    })
+    return resp.ok
   } catch {
     return false
   }

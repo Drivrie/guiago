@@ -9,7 +9,7 @@ import { getPOIsByCity } from '../services/overpass'
 import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
-import { generateAIRoute } from '../services/ai'
+import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
 import { getRoute, orderPOIsOptimally } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
@@ -80,7 +80,8 @@ export function RouteSetupPage() {
 
     const maxPOIs = Math.max(3, Math.min(12, Math.floor(selectedDuration / 20)))
     const visitedNames = getVisitedPOINames(selectedCity.id)
-    const hasApiKey = Boolean(anthropicApiKey)
+    const aiAvailable = hasAIKey(anthropicApiKey)
+    const aiKey = getAIKey(anthropicApiKey)
 
     setLoading(true, language === 'es' ? 'Buscando lugares de interés...' : 'Finding points of interest...')
 
@@ -89,9 +90,9 @@ export function RouteSetupPage() {
       let usedRouteType = selectedRouteType
 
       // ============================================================
-      // AI-ENHANCED PATH: Claude generates curated POI list
+      // AI-ENHANCED PATH: Mistral generates curated POI list
       // ============================================================
-      if (hasApiKey) {
+      if (aiAvailable) {
         setLoading(true, language === 'es' ? '🤖 Creando ruta con IA...' : '🤖 Creating AI-powered route...')
         setUsingAI(true)
 
@@ -100,7 +101,7 @@ export function RouteSetupPage() {
           selectedRouteType,
           selectedDuration,
           language,
-          anthropicApiKey,
+          aiKey,
           visitedNames
         )
 
@@ -277,13 +278,13 @@ export function RouteSetupPage() {
 
       <div className="px-5 py-6 pb-36">
 
-        {/* AI mode badge */}
-        {anthropicApiKey && (
+        {/* AI mode badge — shown whenever AI key is available (built-in or user-provided) */}
+        {hasAIKey(anthropicApiKey) && (
           <div className="mb-4 bg-gradient-to-r from-orange-50 to-amber-50 rounded-2xl px-4 py-3 flex items-center gap-3 border border-orange-100">
             <span className="text-xl">🤖</span>
             <div className="flex-1">
               <p className="text-orange-800 text-sm font-semibold">
-                {language === 'es' ? 'Modo guía profesional con IA activo' : 'AI professional guide mode active'}
+                {language === 'es' ? 'Guía profesional con IA activado' : 'AI professional guide active'}
               </p>
               <p className="text-orange-600 text-xs">
                 {language === 'es' ? 'Rutas curadas al estilo Civitatis · Narraciones personalizadas' : 'Civitatis-style curated routes · Personalized narrations'}
@@ -403,7 +404,7 @@ export function RouteSetupPage() {
       {selectedRouteType && selectedDuration && (
         <div className="fixed bottom-0 left-0 right-0 p-5 bg-white/90 backdrop-blur-sm border-t border-stone-100 safe-bottom">
           <Button fullWidth size="lg" onClick={generateRoute} loading={generatingRoute}>
-            {anthropicApiKey
+            {hasAIKey(anthropicApiKey)
               ? (language === 'es' ? '🤖 Crear ruta con IA' : '🤖 Create AI route')
               : (language === 'es' ? '🚀 Generar ruta' : '🚀 Generate route')}
           </Button>

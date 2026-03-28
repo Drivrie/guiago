@@ -9,7 +9,7 @@ import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
 import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
 import { getAudioScript } from '../services/storage'
-import { generateAIAudioScript } from '../services/ai'
+import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance } from '../services/routing'
 import { stop as stopTTS } from '../services/tts'
 import { ROUTE_TYPE_INFO } from '../types'
@@ -105,12 +105,12 @@ export function ActiveRoutePage() {
       // 2. Fetch Wikipedia description
       const desc = await getPOIDescription(currentPOI!.name, language)
 
-      // 3. If AI key available, use Claude for professional narration
-      if (anthropicApiKey) {
+      // 3. If AI key available (built-in or user), use Mistral for professional narration
+      if (hasAIKey(anthropicApiKey)) {
         const insiderTip = currentPOI!.tags?.['insiderTip'] || undefined
         const reason = currentPOI!.shortDescription || ''
         const aiScript = await generateAIAudioScript(
-          currentPOI!.name, currentPOI!.category, desc || '', reason, insiderTip, language, anthropicApiKey
+          currentPOI!.name, currentPOI!.category, desc || '', reason, insiderTip, language, getAIKey(anthropicApiKey)
         )
         if (aiScript) { setAudioScript(aiScript); setAudioLoading(false); return }
       }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
-import { validateApiKey } from '../services/ai'
+import { validateApiKey, hasBuiltInKey } from '../services/ai'
 
 export function SettingsPage() {
   const navigate = useNavigate()
@@ -65,39 +65,51 @@ export function SettingsPage() {
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xl">🤖</span>
             <h2 className="font-black text-stone-900 text-lg">
-              {es ? 'Guía con Inteligencia Artificial' : 'AI-Powered Guide'}
+              {es ? 'Inteligencia Artificial' : 'AI Guide'}
             </h2>
           </div>
-          <p className="text-stone-500 text-sm mb-4 ml-8">
-            {es
-              ? 'Conecta tu clave de API de Claude (Anthropic) para obtener rutas de calidad profesional — como las de Civitatis o Walkative — con narraciones de audio únicas y personalizadas.'
-              : 'Connect your Claude (Anthropic) API key to get professional-quality routes — like Civitatis or Walkative — with unique, personalized audio narrations.'}
-          </p>
 
-          {/* Benefits */}
-          <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-2xl p-4 mb-4 border border-orange-100">
-            <p className="text-sm font-semibold text-orange-800 mb-2">
-              {es ? '✨ Con IA activada obtienes:' : '✨ With AI enabled you get:'}
-            </p>
-            <ul className="text-sm text-orange-700 space-y-1">
-              <li>• {es ? 'Rutas curadas como operadores turísticos profesionales' : 'Routes curated like professional tour operators'}</li>
-              <li>• {es ? 'Narraciones de audio naturales y apasionadas' : 'Natural and passionate audio narrations'}</li>
-              <li>• {es ? 'Historia y datos insider en cada parada' : 'History and insider facts at each stop'}</li>
-              <li>• {es ? 'Rutas personalizadas excluyendo lo ya visitado' : 'Routes excluding places already visited'}</li>
-            </ul>
-          </div>
+          {/* AI status */}
+          {hasBuiltInKey() ? (
+            <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 mb-4 border border-green-100">
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-2xl">✅</span>
+                <p className="text-green-800 font-bold text-sm">
+                  {es ? 'IA integrada y activa' : 'AI built-in and active'}
+                </p>
+              </div>
+              <ul className="text-sm text-green-700 space-y-1 ml-9">
+                <li>• {es ? 'Rutas curadas estilo Civitatis' : 'Civitatis-style curated routes'}</li>
+                <li>• {es ? 'Narraciones de audio naturales y apasionadas' : 'Natural and passionate audio narrations'}</li>
+                <li>• {es ? 'Historia e información insider en cada parada' : 'History and insider info at each stop'}</li>
+              </ul>
+            </div>
+          ) : (
+            <div className="bg-stone-100 rounded-2xl p-4 mb-4">
+              <p className="text-stone-500 text-sm">
+                {es
+                  ? 'La IA no está configurada en esta versión. La app funciona con rutas basadas en Wikipedia.'
+                  : 'AI is not configured in this version. The app works with Wikipedia-based routes.'}
+              </p>
+            </div>
+          )}
 
-          {/* API Key input */}
+          {/* Optional override key */}
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100">
-            <label className="block text-sm font-semibold text-stone-700 mb-2">
-              {es ? 'Clave API de Anthropic (Claude)' : 'Anthropic (Claude) API Key'}
-            </label>
+            <p className="text-sm font-semibold text-stone-700 mb-1">
+              {es ? 'Clave propia de Mistral AI (opcional)' : 'Personal Mistral AI key (optional)'}
+            </p>
+            <p className="text-stone-400 text-xs mb-3">
+              {es
+                ? 'Si tienes tu propia clave, úsala para mayor límite de uso. Obtén una gratis en console.mistral.ai'
+                : 'If you have your own key, use it for higher usage limits. Get one free at console.mistral.ai'}
+            </p>
             <div className="relative mb-3">
               <input
                 type={showKey ? 'text' : 'password'}
                 value={keyInput}
                 onChange={e => { setKeyInput(e.target.value); setValidationResult(null) }}
-                placeholder="sk-ant-..."
+                placeholder={es ? 'Tu clave de Mistral...' : 'Your Mistral key...'}
                 className="w-full border border-stone-200 rounded-xl px-4 py-3 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-orange-300"
               />
               <button
@@ -112,24 +124,18 @@ export function SettingsPage() {
             {validationResult === 'ok' && (
               <p className="text-green-600 text-sm mb-3 flex items-center gap-1.5">
                 <span>✅</span>
-                {es ? 'Clave válida. ¡IA activada!' : 'Valid key. AI activated!'}
+                {es ? 'Clave válida guardada' : 'Valid key saved'}
               </p>
             )}
             {validationResult === 'error' && (
               <p className="text-red-600 text-sm mb-3 flex items-center gap-1.5">
                 <span>❌</span>
-                {es ? 'Clave inválida o sin crédito disponible.' : 'Invalid key or no credits available.'}
-              </p>
-            )}
-            {anthropicApiKey && validationResult === null && (
-              <p className="text-green-600 text-sm mb-3 flex items-center gap-1.5">
-                <span>🤖</span>
-                {es ? 'IA actualmente activada' : 'AI currently active'}
+                {es ? 'Clave inválida o sin cuota disponible.' : 'Invalid key or no quota available.'}
               </p>
             )}
 
             <div className="flex gap-2">
-              <Button fullWidth onClick={handleSaveKey} loading={validating}>
+              <Button fullWidth onClick={handleSaveKey} loading={validating} variant="secondary">
                 {es ? 'Guardar y verificar' : 'Save & verify'}
               </Button>
               {anthropicApiKey && (
@@ -141,12 +147,6 @@ export function SettingsPage() {
                 </Button>
               )}
             </div>
-
-            <p className="text-stone-400 text-xs mt-3">
-              {es
-                ? '🔒 Tu clave se guarda solo en tu dispositivo. Obtén una clave gratuita en console.anthropic.com'
-                : '🔒 Your key is stored only on your device. Get a free key at console.anthropic.com'}
-            </p>
           </div>
         </section>
 
@@ -242,7 +242,7 @@ export function SettingsPage() {
               {es ? 'Tu guía turístico inteligente' : 'Your intelligent tourist guide'}
             </p>
             <p className="text-stone-300 text-xs mt-2">
-              Powered by Wikipedia · OpenStreetMap · Claude AI
+              Powered by Wikipedia · OpenStreetMap · Mistral AI
             </p>
           </div>
         </section>

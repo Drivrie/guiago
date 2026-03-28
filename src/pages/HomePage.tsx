@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
 import { useAppStore } from '../stores/appStore'
 import { getCityCoords } from '../data/cityData'
+import { hasAIKey } from '../services/ai'
 import type { City } from '../types'
 
 export function HomePage() {
   const { language, setLanguage, recentCities, setCity, anthropicApiKey } = useAppStore()
+  const aiActive = hasAIKey(anthropicApiKey)
   const navigate = useNavigate()
 
   const { setOffline } = useAppStore()
@@ -44,7 +46,7 @@ export function HomePage() {
             <div className="flex items-center gap-2">
               <span className="text-3xl">🗺️</span>
               <h1 className="text-3xl font-black text-stone-900 tracking-tight">GuiAgo</h1>
-              {anthropicApiKey && (
+              {aiActive && (
                 <span className="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">IA ✨</span>
               )}
             </div>
@@ -189,15 +191,15 @@ export function HomePage() {
             onClick={() => navigate('/settings')}
             className="w-full bg-stone-100 rounded-2xl p-4 flex items-center gap-3 active:bg-stone-200 transition-colors"
           >
-            <span className="text-2xl">{anthropicApiKey ? '🤖' : '⚙️'}</span>
+            <span className="text-2xl">{aiActive ? '🤖' : '⚙️'}</span>
             <div className="text-left flex-1">
               <p className="font-semibold text-stone-700 text-sm">
                 {language === 'es' ? 'Configuración y IA' : 'Settings & AI'}
               </p>
               <p className="text-xs text-stone-400">
-                {anthropicApiKey
-                  ? (language === 'es' ? 'IA activada · Clave configurada' : 'AI active · Key configured')
-                  : (language === 'es' ? 'Activa el guía con IA' : 'Activate the AI guide')}
+                {aiActive
+                  ? (language === 'es' ? 'IA activa · Guía profesional' : 'AI active · Professional guide')
+                  : (language === 'es' ? 'Configuración del guía' : 'Guide settings')}
               </p>
             </div>
             <svg className="w-5 h-5 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
