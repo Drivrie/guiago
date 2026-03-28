@@ -25,11 +25,12 @@ export function ActiveRoutePage() {
   const navigate = useNavigate()
   const {
     language, currentRoute, pois, currentPOIIndex, setCurrentPOIIndex,
-    setPOIs, setRoute, anthropicApiKey, markPOIsVisited
+    setPOIs, setRoute, anthropicApiKey, markPOIsVisited,
+    userLocation: globalUserLocation, setUserLocation: setGlobalUserLocation
   } = useAppStore()
 
   const [phase, setPhase] = useState<GuidePhase>('selecting_start')
-  const [userLocation, setUserLocation] = useState<[number, number] | null>(null)
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(globalUserLocation)
   const [audioScript, setAudioScript] = useState('')
   const [audioLoading, setAudioLoading] = useState(false)
   const [currentStepIndex, setCurrentStepIndex] = useState(0)
@@ -52,7 +53,11 @@ export function ActiveRoutePage() {
   useEffect(() => {
     if (!navigator.geolocation) return
     const watch = navigator.geolocation.watchPosition(
-      pos => setUserLocation([pos.coords.latitude, pos.coords.longitude]),
+      pos => {
+        const loc: [number, number] = [pos.coords.latitude, pos.coords.longitude]
+        setUserLocation(loc)
+        setGlobalUserLocation(loc)
+      },
       () => null,
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
     )
@@ -452,6 +457,7 @@ export function ActiveRoutePage() {
             currentPOIIndex={currentPOIIndex}
             userLocation={userLocation}
             onPOIClick={setCurrentPOIIndex}
+            followUser
             className="w-full h-full"
           />
 

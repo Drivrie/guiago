@@ -52,7 +52,8 @@ export function TodayPage() {
   const navigate = useNavigate()
   const {
     language, setCity, setRouteType, setDuration,
-    selectedRouteType, selectedDuration, getVisitedPOINames
+    selectedRouteType, selectedDuration, getVisitedPOINames,
+    setUserLocation
   } = useAppStore()
 
   const [phase, setPhase] = useState<'locating' | 'selecting' | 'error'>('locating')
@@ -71,6 +72,8 @@ export function TodayPage() {
 
     navigator.geolocation.getCurrentPosition(
       async pos => {
+        // Store GPS location globally so ActiveRoutePage can use it immediately
+        setUserLocation([pos.coords.latitude, pos.coords.longitude])
         const result = await reverseGeocode(pos.coords.latitude, pos.coords.longitude)
         if (result) {
           setLocation(result)

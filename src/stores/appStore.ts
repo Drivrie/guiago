@@ -60,6 +60,10 @@ interface AppStore {
   markPOIsVisited: (cityId: string, poiNames: string[]) => void
   getVisitedPOINames: (cityId: string) => string[]
   clearVisitHistory: (cityId?: string) => void
+
+  // GPS (not persisted — resets each session)
+  userLocation: [number, number] | null
+  setUserLocation: (loc: [number, number] | null) => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -124,6 +128,9 @@ export const useAppStore = create<AppStore>()(
 
       isOffline: !navigator.onLine,
       setOffline: (offline) => set({ isOffline: offline }),
+
+      userLocation: null,
+      setUserLocation: (loc) => set({ userLocation: loc }),
 
       visitedPOIs: {},
       markPOIsVisited: (cityId, poiNames) => {

@@ -18,14 +18,15 @@ interface MapViewProps {
   userLocation?: [number, number] | null
   onPOIClick?: (index: number) => void
   className?: string
+  followUser?: boolean
 }
 
-export function MapView({ pois, route, currentPOIIndex = 0, userLocation, onPOIClick, className = '' }: MapViewProps) {
+export function MapView({ pois, route, currentPOIIndex = 0, userLocation, onPOIClick, className = '', followUser = false }: MapViewProps) {
   const mapRef = useRef<L.Map | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const markersRef = useRef<L.Marker[]>([])
   const routeLineRef = useRef<L.Polyline | null>(null)
-  const userMarkerRef = useRef<L.CircleMarker | null>(null)
+  const userMarkerRef = useRef<L.Marker | null>(null)
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
@@ -110,20 +111,19 @@ export function MapView({ pois, route, currentPOIIndex = 0, userLocation, onPOIC
       }
       if (allCoords.length > 0) {
         routeLineRef.current = L.polyline(allCoords, {
-          color: '#F97316',
-          weight: 4,
-          opacity: 0.8,
-          dashArray: '8,4'
+          color: '#1a73e8',
+          weight: 5,
+          opacity: 0.85,
         }).addTo(map)
       }
     } else if (pois.length > 1) {
       // Simple straight lines if no route
       const coords: [number, number][] = pois.map(p => [p.lat, p.lon])
       routeLineRef.current = L.polyline(coords, {
-        color: '#F97316',
-        weight: 3,
-        opacity: 0.5,
-        dashArray: '6,6'
+        color: '#1a73e8',
+        weight: 4,
+        opacity: 0.6,
+        dashArray: '8,4'
       }).addTo(map)
     }
 
@@ -142,7 +142,7 @@ export function MapView({ pois, route, currentPOIIndex = 0, userLocation, onPOIC
     }
   }, [currentPOIIndex, pois])
 
-  // User location marker
+  // User location marker + auto-follow
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -153,15 +153,28 @@ export function MapView({ pois, route, currentPOIIndex = 0, userLocation, onPOIC
     }
 
     if (userLocation) {
-      userMarkerRef.current = L.circleMarker(userLocation, {
-        radius: 8,
-        fillColor: '#3B82F6',
-        fillOpacity: 1,
-        color: 'white',
-        weight: 3,
-      }).addTo(map)
+      // Pulsing blue dot (Google Maps style)
+      const icon = L.divIcon({
+        html: `<div style="
+          width:20px;height:20px;border-radius:50%;
+          background:#3B82F6;
+          border:3px solid white;
+          box-shadow:0 0 0 4px rgba(59,130,246,0.3);
+          animation:pulse 2s ease-in-out infinite;
+        "></div>
+        <style>@keyframes pulse{0%,100%{box-shadow:0 0 0 4px rgba(59,130,246,0.3)}50%{box-shadow:0 0 0 8px rgba(59,130,246,0.1)}}</style>`,
+        className: '',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      })
+      userMarkerRef.current = L.marker(userLocation, { icon, zIndexOffset: 1000 }).addTo(map)
+
+      // Auto-follow user when followUser=true
+      if (followUser) {
+        map.setView(userLocation, Math.max(map.getZoom(), 16), { animate: true })
+      }
     }
-  }, [userLocation])
+  }, [userLocation, followUser])
 
   return (
     <div

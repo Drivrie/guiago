@@ -10,7 +10,7 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, orderPOIsOptimally } from '../services/routing'
+import { getRoute, getStepByStepInstructions, orderPOIsOptimally } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
@@ -205,11 +205,7 @@ export function RouteSetupPage() {
           const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]])
           if (result) {
             // Parse steps for navigation
-            const steps = result.legs.flatMap(leg => leg.steps.map(s => ({
-              instruction: s.instruction,
-              distance: s.distance.value,
-              duration: s.duration.value,
-            })))
+            const steps = getStepByStepInstructions(result)
             segments.push({ from, to, steps, distance: result.distance, duration: result.duration, geometry: result.geometry.coordinates })
             totalDistance += result.distance
             totalDuration += result.duration
