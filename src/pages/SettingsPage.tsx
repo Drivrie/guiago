@@ -69,47 +69,37 @@ export function SettingsPage() {
             </h2>
           </div>
 
-          {/* AI status */}
-          {hasBuiltInKey() ? (
-            <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 mb-4 border border-green-100">
-              <div className="flex items-center gap-3 mb-2">
-                <span className="text-2xl">✅</span>
-                <p className="text-green-800 font-bold text-sm">
-                  {es ? 'IA integrada y activa' : 'AI built-in and active'}
-                </p>
-              </div>
-              <ul className="text-sm text-green-700 space-y-1 ml-9">
-                <li>• {es ? 'Rutas curadas estilo Civitatis' : 'Civitatis-style curated routes'}</li>
-                <li>• {es ? 'Narraciones de audio naturales y apasionadas' : 'Natural and passionate audio narrations'}</li>
-                <li>• {es ? 'Historia e información insider en cada parada' : 'History and insider info at each stop'}</li>
-              </ul>
-            </div>
-          ) : (
-            <div className="bg-stone-100 rounded-2xl p-4 mb-4">
-              <p className="text-stone-500 text-sm">
-                {es
-                  ? 'La IA no está configurada en esta versión. La app funciona con rutas basadas en Wikipedia.'
-                  : 'AI is not configured in this version. The app works with Wikipedia-based routes.'}
+          {/* AI always active via Pollinations */}
+          <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 mb-4 border border-green-100">
+            <div className="flex items-center gap-3 mb-2">
+              <span className="text-2xl">✅</span>
+              <p className="text-green-800 font-bold text-sm">
+                {es ? 'IA integrada y activa — sin configurar nada' : 'AI built-in and active — no setup needed'}
               </p>
             </div>
-          )}
+            <ul className="text-sm text-green-700 space-y-1 ml-9">
+              <li>• {es ? 'Rutas curadas estilo Civitatis · narraciones apasionadas' : 'Civitatis-style curated routes · passionate narrations'}</li>
+              <li>• {es ? 'Funciona sin cuenta ni clave API' : 'Works without any account or API key'}</li>
+              <li>• {es ? 'Motor: Pollinations.ai (GPT-4o-mini gratuito)' : 'Engine: Pollinations.ai (free GPT-4o-mini)'}</li>
+            </ul>
+          </div>
 
-          {/* Optional override key */}
+          {/* Optional Mistral key upgrade */}
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100">
             <p className="text-sm font-semibold text-stone-700 mb-1">
-              {es ? 'Clave propia de Mistral AI (opcional)' : 'Personal Mistral AI key (optional)'}
+              {es ? '⚡ Mejora opcional: clave Mistral AI' : '⚡ Optional upgrade: Mistral AI key'}
             </p>
             <p className="text-stone-400 text-xs mb-3">
               {es
-                ? 'Si tienes tu propia clave, úsala para mayor límite de uso. Obtén una gratis en console.mistral.ai'
-                : 'If you have your own key, use it for higher usage limits. Get one free at console.mistral.ai'}
+                ? 'Si tienes cuenta gratuita en console.mistral.ai, añade tu clave para mayor fiabilidad y límites más altos.'
+                : 'If you have a free account at console.mistral.ai, add your key for better reliability and higher limits.'}
             </p>
             <div className="relative mb-3">
               <input
                 type={showKey ? 'text' : 'password'}
                 value={keyInput}
                 onChange={e => { setKeyInput(e.target.value); setValidationResult(null) }}
-                placeholder={es ? 'Tu clave de Mistral...' : 'Your Mistral key...'}
+                placeholder={es ? 'Tu clave Mistral (opcional)...' : 'Your Mistral key (optional)...'}
                 className="w-full border border-stone-200 rounded-xl px-4 py-3 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-orange-300"
               />
               <button
@@ -124,13 +114,13 @@ export function SettingsPage() {
             {validationResult === 'ok' && (
               <p className="text-green-600 text-sm mb-3 flex items-center gap-1.5">
                 <span>✅</span>
-                {es ? 'Clave válida guardada' : 'Valid key saved'}
+                {es ? 'Clave Mistral activa' : 'Mistral key active'}
               </p>
             )}
             {validationResult === 'error' && (
               <p className="text-red-600 text-sm mb-3 flex items-center gap-1.5">
                 <span>❌</span>
-                {es ? 'Clave inválida o sin cuota disponible.' : 'Invalid key or no quota available.'}
+                {es ? 'Clave inválida.' : 'Invalid key.'}
               </p>
             )}
 
@@ -242,7 +232,7 @@ export function SettingsPage() {
               {es ? 'Tu guía turístico inteligente' : 'Your intelligent tourist guide'}
             </p>
             <p className="text-stone-300 text-xs mt-2">
-              Powered by Wikipedia · OpenStreetMap · Mistral AI
+              Powered by Wikipedia · OpenStreetMap · Pollinations.ai
             </p>
           </div>
         </section>
