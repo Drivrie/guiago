@@ -10,8 +10,8 @@ import { useAppStore } from '../stores/appStore'
 import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
 import { getAudioScript } from '../services/storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute } from '../services/routing'
-import { stop as stopTTS } from '../services/tts'
+import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
+import { speak, stop as stopTTS } from '../services/tts'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
@@ -40,14 +40,22 @@ export function ActiveRoutePage() {
   const [showManualList, setShowManualList] = useState(false)
   const [distanceToPOI, setDistanceToPOI] = useState<number | null>(null)
   const [showDownload, setShowDownload] = useState(false)
+  const [voiceMuted, setVoiceMuted] = useState(false)
+  const [preRouteSegment, setPreRouteSegment] = useState<RouteSegment | null>(null)
+  const [inPreRoute, setInPreRoute] = useState(false)
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
+  const lastSpokenStepRef = useRef<number>(-1)
 
   const currentPOI = pois[currentPOIIndex]
   const nextPOIObj = pois[currentPOIIndex + 1] || null
   const isLast = currentPOIIndex === pois.length - 1
   const routeInfo = currentRoute ? ROUTE_TYPE_INFO.find(r => r.id === currentRoute.routeType) : null
-  const currentSegment = currentRoute?.segments?.[currentPOIIndex] ?? null
-  const navSteps = currentSegment?.steps ?? []
+  // When inPreRoute: use the segment from user GPS → first POI
+  // Otherwise: use segment from prev POI → current POI (index - 1)
+  const activeSegment = inPreRoute && preRouteSegment
+    ? preRouteSegment
+    : (currentRoute?.segments?.[currentPOIIndex - 1] ?? null)
+  const navSteps = activeSegment?.steps ?? []
   const currentNavStep = navSteps[currentStepIndex] ?? null
   const nextNavStep = navSteps[currentStepIndex + 1] ?? null
 
@@ -88,15 +96,47 @@ export function ActiveRoutePage() {
     }
   }, [phase])
 
-  // ---- GPS arrival detection (80m radius) ----
+  // ---- GPS arrival detection (30m radius) ----
   useEffect(() => {
     if (phase !== 'navigating' || !userLocation || !currentPOI) return
     const dist = calculateDistance(userLocation[0], userLocation[1], currentPOI.lat, currentPOI.lon)
     setDistanceToPOI(Math.round(dist))
-    if (dist < 80) {
+    if (dist < 30) {
+      setInPreRoute(false)
+      setPreRouteSegment(null)
       setPhase('at_poi')
     }
   }, [userLocation, phase, currentPOIIndex])
+
+  // ---- Auto-advance navigation step when approaching next turn point ----
+  useEffect(() => {
+    if (phase !== 'navigating' || !userLocation || navSteps.length <= 1) return
+    const nextStep = navSteps[currentStepIndex + 1]
+    if (!nextStep?.coordinates) return
+    // coordinates is [lon, lat] from OSRM
+    const dist = calculateDistance(
+      userLocation[0], userLocation[1],
+      nextStep.coordinates[1], nextStep.coordinates[0]
+    )
+    if (dist < 40 && currentStepIndex < navSteps.length - 1) {
+      setCurrentStepIndex(i => i + 1)
+    }
+  }, [userLocation, phase, navSteps, currentStepIndex])
+
+  // ---- Voice navigation: speak instruction when step changes ----
+  useEffect(() => {
+    if (phase !== 'navigating' || voiceMuted || !currentNavStep) return
+    if (currentStepIndex === lastSpokenStepRef.current) return
+    lastSpokenStepRef.current = currentStepIndex
+    const text = buildVoiceInstruction(currentNavStep, language)
+    speak(text, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
+  }, [currentStepIndex, phase, voiceMuted])
+
+  // ---- Mark current POI as visited when arriving (at_poi phase) ----
+  useEffect(() => {
+    if (phase !== 'at_poi' || !currentPOI || !currentRoute) return
+    markPOIsVisited(currentRoute.city.id, [currentPOI.name])
+  }, [phase, currentPOI?.id])
 
   // ---- Load audio when entering at_poi (AI-enhanced when key available) ----
   useEffect(() => {
@@ -144,6 +184,36 @@ export function ActiveRoutePage() {
     if (!currentRoute) return
     setRebuilding(true)
     const orderedPOIs = orderPOIsOptimally([...pois], startLat, startLon)
+
+    // Build pre-route: from user start position → first POI
+    const firstPOI = orderedPOIs[0]
+    let preRoute: RouteSegment | null = null
+    const distToFirst = calculateDistance(startLat, startLon, firstPOI.lat, firstPOI.lon)
+    if (distToFirst > 50) {
+      try {
+        const result = await getRoute([[startLat, startLon], [firstPOI.lat, firstPOI.lon]])
+        const routeData = result ?? getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
+        preRoute = {
+          from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
+          to: firstPOI,
+          steps: getStepByStepInstructions(routeData),
+          distance: routeData.distance,
+          duration: routeData.duration,
+          geometry: routeData.geometry.coordinates,
+        }
+      } catch {
+        const direct = getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
+        preRoute = {
+          from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
+          to: firstPOI,
+          steps: getStepByStepInstructions(direct),
+          distance: direct.distance, duration: direct.duration,
+          geometry: [[startLon, startLat], [firstPOI.lon, firstPOI.lat]],
+        }
+      }
+    }
+
+    // Build segments between consecutive POIs
     const segments: RouteSegment[] = []
     for (let i = 0; i < orderedPOIs.length - 1; i++) {
       try {
@@ -168,17 +238,24 @@ export function ActiveRoutePage() {
     setPOIs(orderedPOIs)
     setRoute({ ...currentRoute, pois: orderedPOIs, segments })
     setCurrentPOIIndex(0)
+    setCurrentStepIndex(0)
+    lastSpokenStepRef.current = -1
+    setPreRouteSegment(preRoute)
+    setInPreRoute(preRoute !== null)
     setRebuilding(false)
-    setPhase('navigating')
+    // If user is essentially at first POI, skip directly to at_poi
+    if (!preRoute) {
+      setPhase('at_poi')
+    } else {
+      setPhase('navigating')
+    }
   }
 
   function advanceToNext() {
     stopTTS()
+    setCurrentStepIndex(0)
+    lastSpokenStepRef.current = -1
     if (isLast) {
-      // Mark all POIs in this route as visited
-      if (currentRoute) {
-        markPOIsVisited(currentRoute.city.id, pois.map(p => p.name))
-      }
       setPhase('complete')
     } else {
       setCurrentPOIIndex(currentPOIIndex + 1)
@@ -403,7 +480,10 @@ export function ActiveRoutePage() {
           </button>
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold text-sm truncate">
-              {language === 'es' ? `Hacia: ${currentPOI?.name}` : `Going to: ${currentPOI?.name}`}
+              {inPreRoute
+                ? (language === 'es' ? `Hacia la 1ª parada: ${currentPOI?.name}` : `To 1st stop: ${currentPOI?.name}`)
+                : (language === 'es' ? `Hacia: ${currentPOI?.name}` : `Going to: ${currentPOI?.name}`)
+              }
             </p>
             <p className="text-stone-400 text-xs">
               {language === 'es' ? 'Parada' : 'Stop'} {currentPOIIndex + 1}/{pois.length}
@@ -422,33 +502,28 @@ export function ActiveRoutePage() {
 
         {/* Navigation panel - OUTSIDE map container so z-index works correctly */}
         <div className="px-3 pb-2 bg-stone-900">
-          <NavigationPanel
-            currentStep={currentNavStep}
-            nextStep={nextNavStep ?? undefined}
-            remainingDistance={currentSegment?.distance}
-            remainingTime={currentSegment?.duration}
-            targetPOIName={currentPOI?.name}
-          />
-          {navSteps.length > 1 && (
-            <div className="flex gap-2 mt-1.5">
-              {currentStepIndex > 0 && (
-                <button
-                  onClick={() => setCurrentStepIndex(i => i - 1)}
-                  className="flex-1 bg-stone-800 text-white text-xs py-2 rounded-xl"
-                >
-                  ← {language === 'es' ? 'Anterior' : 'Previous'}
-                </button>
-              )}
-              {currentStepIndex < navSteps.length - 1 && (
-                <button
-                  onClick={() => setCurrentStepIndex(i => i + 1)}
-                  className="flex-1 bg-stone-800 text-white text-xs py-2 rounded-xl"
-                >
-                  {language === 'es' ? 'Siguiente' : 'Next'} →
-                </button>
-              )}
+          <div className="flex items-start gap-2">
+            <div className="flex-1">
+              <NavigationPanel
+                currentStep={currentNavStep}
+                nextStep={nextNavStep ?? undefined}
+                remainingDistance={activeSegment?.distance}
+                remainingTime={activeSegment?.duration}
+                targetPOIName={currentPOI?.name}
+              />
             </div>
-          )}
+            {/* Voice mute toggle */}
+            <button
+              onClick={() => {
+                setVoiceMuted(v => !v)
+                if (!voiceMuted) stopTTS()
+              }}
+              className="w-11 h-11 flex-shrink-0 bg-stone-800 rounded-xl flex items-center justify-center text-lg mt-0.5"
+              title={voiceMuted ? (language === 'es' ? 'Activar voz' : 'Enable voice') : (language === 'es' ? 'Silenciar voz' : 'Mute voice')}
+            >
+              {voiceMuted ? '🔇' : '🔊'}
+            </button>
+          </div>
         </div>
 
         {/* Map */}
@@ -500,7 +575,7 @@ export function ActiveRoutePage() {
             </svg>
           </button>
 
-          {distanceToPOI !== null && distanceToPOI < 200 ? (
+          {distanceToPOI !== null && distanceToPOI < 100 ? (
             <button
               onClick={() => setPhase('at_poi')}
               className="w-full py-4 bg-green-600 text-white font-bold rounded-2xl text-lg active:scale-95 transition-transform"

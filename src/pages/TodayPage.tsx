@@ -95,7 +95,7 @@ export function TodayPage() {
         setGeoError(msg)
         setPhase('error')
       },
-      { enableHighAccuracy: true, timeout: 12000 }
+      { enableHighAccuracy: true, timeout: 6000 }
     )
   }, [])
 

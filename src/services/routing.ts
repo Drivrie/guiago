@@ -61,7 +61,7 @@ function buildInstructionEs(type: string, modifier?: string, streetName?: string
     case 'continue':
       return `Continúa recto${street}`
     case 'merge':
-      return `Incorporate${street}`
+      return `Incorpórate${street}`
     case 'fork':
       if (modifier?.includes('left')) return `En el cruce, ve por la izquierda${street}`
       if (modifier?.includes('right')) return `En el cruce, ve por la derecha${street}`
@@ -192,15 +192,15 @@ export function getDirectRoute(from: { lat: number; lon: number }, to: { lat: nu
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon)
   const bearingDeg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
 
-  let direction: 'straight' | 'slight_left' | 'slight_right' | 'left' | 'right' = 'straight'
-  if (bearingDeg > 337.5 || bearingDeg <= 22.5) direction = 'straight'
-  else if (bearingDeg <= 67.5) direction = 'slight_right'
-  else if (bearingDeg <= 112.5) direction = 'right'
-  else if (bearingDeg <= 157.5) direction = 'slight_right'
-  else if (bearingDeg <= 202.5) direction = 'straight'
-  else if (bearingDeg <= 247.5) direction = 'slight_left'
-  else if (bearingDeg <= 292.5) direction = 'left'
-  else direction = 'slight_left'
+  let direction: NavigationStep['direction'] = 'straight'
+  if (bearingDeg > 337.5 || bearingDeg <= 22.5) direction = 'straight'     // N
+  else if (bearingDeg <= 67.5) direction = 'slight_right'                    // NE
+  else if (bearingDeg <= 112.5) direction = 'right'                          // E
+  else if (bearingDeg <= 157.5) direction = 'right'                          // SE
+  else if (bearingDeg <= 202.5) direction = 'u_turn'                         // S
+  else if (bearingDeg <= 247.5) direction = 'left'                           // SW
+  else if (bearingDeg <= 292.5) direction = 'left'                           // W
+  else direction = 'slight_left'                                             // NW
 
   const instruction = `Dirígete ${dist > 500 ? `${(dist/1000).toFixed(1)} km` : `${Math.round(dist)} m`} hacia el destino`
   const icon = direction === 'left' ? '↰' : direction === 'right' ? '↱' : '↑'
@@ -247,6 +247,38 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
   return R * c
+}
+
+/** Builds a natural spoken instruction for TTS (more human than the display text) */
+export function buildVoiceInstruction(step: NavigationStep, lang: 'es' | 'en'): string {
+  const dist = step.distance
+  const distStr = dist < 50 ? '' : dist < 1000
+    ? (lang === 'es' ? `en ${Math.round(dist / 10) * 10} metros` : `in ${Math.round(dist / 10) * 10} meters`)
+    : (lang === 'es' ? `en ${(dist / 1000).toFixed(1)} kilómetros` : `in ${(dist / 1000).toFixed(1)} kilometers`)
+
+  if (lang === 'es') {
+    switch (step.direction) {
+      case 'arrive': return 'Has llegado a tu destino.'
+      case 'straight': return distStr ? `Continúa recto ${distStr}.` : 'Continúa recto.'
+      case 'left': return distStr ? `${distStr}, gira a la izquierda.` : 'Gira a la izquierda.'
+      case 'right': return distStr ? `${distStr}, gira a la derecha.` : 'Gira a la derecha.'
+      case 'slight_left': return distStr ? `${distStr}, gira ligeramente a la izquierda.` : 'Gira ligeramente a la izquierda.'
+      case 'slight_right': return distStr ? `${distStr}, gira ligeramente a la derecha.` : 'Gira ligeramente a la derecha.'
+      case 'u_turn': return 'Da la vuelta cuando puedas.'
+      default: return step.instruction
+    }
+  } else {
+    switch (step.direction) {
+      case 'arrive': return "You've arrived at your destination."
+      case 'straight': return distStr ? `Continue straight ${distStr}.` : 'Continue straight.'
+      case 'left': return distStr ? `${distStr}, turn left.` : 'Turn left.'
+      case 'right': return distStr ? `${distStr}, turn right.` : 'Turn right.'
+      case 'slight_left': return distStr ? `${distStr}, turn slightly left.` : 'Turn slightly left.'
+      case 'slight_right': return distStr ? `${distStr}, turn slightly right.` : 'Turn slightly right.'
+      case 'u_turn': return 'Make a U-turn when safe.'
+      default: return step.instruction
+    }
+  }
 }
 
 export function estimateWalkingTime(distanceMeters: number): number {

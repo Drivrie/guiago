@@ -5,25 +5,34 @@ import type { RouteType, Language } from '../types'
 // ---------------------------------------------------------------------------
 
 // Pollinations.ai — free, no account, no key, CORS-enabled, always available
-// Uses GPT-4o-mini under the hood. private:true prevents public feed exposure.
 const POLLINATIONS_API = 'https://text.pollinations.ai/'
 
-// Mistral AI — optional user-provided key for higher limits / reliability
+// Mistral AI — optional key for higher quality / limits
 const MISTRAL_API = 'https://api.mistral.ai/v1/chat/completions'
 const MISTRAL_MODEL = 'open-mistral-nemo'
 
+// Built-in Mistral key from build-time env var (set in GitHub Secrets as VITE_MISTRAL_KEY)
+const BUILT_IN_MISTRAL_KEY = (import.meta.env.VITE_MISTRAL_KEY as string | undefined) || ''
+
 // ---------------------------------------------------------------------------
-// Key helpers (AI is always available via Pollinations — key is just an upgrade)
+// Key helpers
 // ---------------------------------------------------------------------------
 
 /** AI is always available (Pollinations needs no key). Returns true always. */
 export function hasAIKey(_userKey: string): boolean { return true }
 
-/** Returns user's optional Mistral key (empty = use Pollinations) */
-export function getAIKey(userKey: string): string { return userKey?.trim() || '' }
+/** Resolves effective key: user key → built-in env key → '' (Pollinations) */
+export function getAIKey(userKey: string): string { return userKey?.trim() || BUILT_IN_MISTRAL_KEY }
 
-/** AI is always built-in via Pollinations */
-export function hasBuiltInKey(): boolean { return true }
+/** Whether a built-in Mistral key is baked in via VITE_MISTRAL_KEY */
+export function hasBuiltInKey(): boolean { return !!BUILT_IN_MISTRAL_KEY }
+
+/** Which AI engine is active given a userKey */
+export function activeEngine(userKey: string): 'mistral_user' | 'mistral_builtin' | 'pollinations' {
+  if (userKey?.trim()) return 'mistral_user'
+  if (BUILT_IN_MISTRAL_KEY) return 'mistral_builtin'
+  return 'pollinations'
+}
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -81,10 +90,25 @@ const ROUTE_TYPE_DESC: Record<RouteType, { es: string; en: string }> = {
 }
 
 // ---------------------------------------------------------------------------
+// Timeout helper
+// ---------------------------------------------------------------------------
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`AI request timed out after ${ms}ms`)), ms)
+    ),
+  ])
+}
+
+// ---------------------------------------------------------------------------
 // Internal callers
 // ---------------------------------------------------------------------------
 
 async function callPollinations(system: string, user: string): Promise<string> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
   const resp = await fetch(POLLINATIONS_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -95,11 +119,12 @@ async function callPollinations(system: string, user: string): Promise<string> {
       ],
       model: 'openai',
       seed: Math.floor(Math.random() * 9999),
-      private: true,   // don't appear in pollinations public feed
+      private: true,
     }),
-  })
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout))
   if (!resp.ok) throw new Error(`Pollinations ${resp.status}`)
-  return resp.text()   // Pollinations returns plain text, not a JSON envelope
+  return resp.text()
 }
 
 async function callMistral(
@@ -108,22 +133,25 @@ async function callMistral(
   apiKey: string,
   maxTokens = 1200
 ): Promise<string> {
-  const resp = await fetch(MISTRAL_API, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MISTRAL_MODEL,
-      max_tokens: maxTokens,
-      temperature: 0.7,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+  const resp = await withTimeout(
+    fetch(MISTRAL_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: MISTRAL_MODEL,
+        max_tokens: maxTokens,
+        temperature: 0.75,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
     }),
-  })
+    20000
+  )
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}))
     throw new Error((err as { message?: string }).message || `HTTP ${resp.status}`)
@@ -133,13 +161,13 @@ async function callMistral(
 }
 
 /**
- * Calls AI: uses user's Mistral key if provided (higher limits), otherwise
- * falls back to Pollinations (free, no key, always available).
+ * Calls AI: user key → built-in Mistral key → Pollinations fallback.
  */
 async function callAI(system: string, user: string, userKey: string, maxTokens = 1200): Promise<string> {
-  if (userKey) {
+  const effectiveKey = userKey || BUILT_IN_MISTRAL_KEY
+  if (effectiveKey) {
     try {
-      return await callMistral(system, user, userKey, maxTokens)
+      return await callMistral(system, user, effectiveKey, maxTokens)
     } catch (err) {
       console.warn('Mistral failed, falling back to Pollinations:', err)
     }
@@ -160,19 +188,20 @@ export async function generateAIRoute(
   userKey: string,
   excludeNames: string[] = []
 ): Promise<AIRouteResult | null> {
-  const maxPOIs = Math.max(3, Math.min(12, Math.floor(durationMinutes / 20)))
+  // More POIs: 1 per 15 min, min 5, max 15
+  const maxPOIs = Math.max(5, Math.min(15, Math.floor(durationMinutes / 15)))
   const typeDesc = ROUTE_TYPE_DESC[routeType][lang]
   const excludeClause =
     excludeNames.length > 0
       ? lang === 'es'
-        ? `\nIMPORTANTE: El usuario ya ha visitado estos lugares, exclúyelos completamente: ${excludeNames.slice(0, 15).join(', ')}.`
-        : `\nIMPORTANT: The user already visited these places, exclude them completely: ${excludeNames.slice(0, 15).join(', ')}.`
+        ? `\nIMPORTANTE: El usuario ya ha visitado estos lugares — exclúyelos completamente: ${excludeNames.slice(0, 15).join(', ')}.`
+        : `\nIMPORTANT: The user already visited these places — exclude them completely: ${excludeNames.slice(0, 15).join(', ')}.`
       : ''
 
   const system =
     lang === 'es'
-      ? `Eres un guía turístico profesional de élite, del nivel de los mejores guías de Civitatis o Walkative. Conoces en profundidad la historia, cultura, arquitectura y secretos de todas las ciudades del mundo. Creas rutas turísticas memorables, coherentes y narrativas. Siempre respondes exclusivamente con JSON válido, sin texto adicional, sin markdown.`
-      : `You are an elite professional tour guide, on par with the best guides from Civitatis or Walkative. You deeply know the history, culture, architecture and secrets of cities worldwide. You create memorable, coherent and narrative tours. Always respond exclusively with valid JSON, no additional text, no markdown.`
+      ? `Eres un guía turístico profesional de élite, del nivel de los mejores guías de Civitatis o Walkative. Conoces en profundidad la historia, cultura, arquitectura y secretos de todas las ciudades del mundo. Creas rutas turísticas memorables, coherentes y narrativas. Diseñas rutas ÁGILES: paradas próximas entre sí (máximo 600-800m entre paradas consecutivas) para que la ruta sea fluida y disfrutable. Siempre respondes exclusivamente con JSON válido, sin texto adicional, sin markdown.`
+      : `You are an elite professional tour guide, on par with the best guides from Civitatis or Walkative. You deeply know the history, culture, architecture and secrets of cities worldwide. You create memorable, coherent and narrative tours. You design AGILE routes: stops close to each other (max 600-800m between consecutive stops) for a smooth, enjoyable walk. Always respond exclusively with valid JSON, no additional text, no markdown.`
 
   const user =
     lang === 'es'
@@ -182,11 +211,12 @@ export async function generateAIRoute(
 - Número de paradas: ${maxPOIs}${excludeClause}
 
 REQUISITOS ESTRICTOS (al nivel de Civitatis o Walkative):
-1. TODOS los lugares deben estar en ${cityName} — no en pueblos o ciudades cercanas
-2. Orden optimizado para caminar sin rodeos innecesarios
-3. Coherencia temática perfecta — cada parada refuerza el hilo narrativo
-4. Información histórica específica y verificable, no genérica
-5. Consejos insider reales: horarios óptimos, entradas, trucos locales, qué evitar
+1. TODOS los lugares deben estar físicamente EN ${cityName}, no en pueblos ni ciudades cercanas
+2. Distancia máxima entre paradas consecutivas: 600-800 metros a pie
+3. Orden geográfico óptimo para caminar sin rodeos — ruta circular o lineal lógica
+4. Coherencia temática perfecta — cada parada refuerza el hilo narrativo
+5. Información histórica específica y verificable, no genérica
+6. Consejos insider reales: horarios óptimos, entradas, trucos locales, qué evitar
 
 JSON exacto (sin texto fuera del JSON):
 {
@@ -195,8 +225,8 @@ JSON exacto (sin texto fuera del JSON):
     {
       "name": "Nombre oficial completo y exacto del lugar en ${cityName}",
       "category": "categoría precisa (catedral/museo/plaza/palacio/jardín/mercado/barrio/iglesia/etc)",
-      "reason": "Por qué es imprescindible en esta ruta: 1-2 datos históricos o culturales fascinantes y específicos, no genéricos",
-      "insiderTip": "Consejo práctico y concreto: hora mejor para visitar, entrada gratuita, detalle que pocos conocen, qué pedir, dónde sentarse — específico para este lugar en ${cityName}. null si no hay nada relevante."
+      "reason": "Por qué es imprescindible en esta ruta: 1-2 datos históricos o culturales fascinantes y específicos",
+      "insiderTip": "Consejo práctico y concreto: hora mejor para visitar, entrada gratuita, detalle que pocos conocen, qué pedir, dónde sentarse. null si no hay nada relevante."
     }
   ]
 }`
@@ -206,11 +236,12 @@ JSON exacto (sin texto fuera del JSON):
 - Number of stops: ${maxPOIs}${excludeClause}
 
 STRICT REQUIREMENTS (Civitatis / Walkative level):
-1. ALL places must be located IN ${cityName} — not nearby towns or cities
-2. Optimized walking order — no unnecessary backtracking
-3. Perfect thematic coherence — every stop reinforces the narrative thread
-4. Specific, verifiable historical information — not generic descriptions
-5. Real insider tips: optimal visit times, tickets, local tricks, what to avoid
+1. ALL places must be physically IN ${cityName} — not nearby towns or cities
+2. Max walking distance between consecutive stops: 600-800 meters
+3. Optimal geographic order — no unnecessary backtracking, logical circular or linear route
+4. Perfect thematic coherence — every stop reinforces the narrative thread
+5. Specific, verifiable historical information — not generic descriptions
+6. Real insider tips: optimal visit times, tickets, local tricks, what to avoid
 
 Exact JSON (no text outside JSON):
 {
@@ -219,24 +250,27 @@ Exact JSON (no text outside JSON):
     {
       "name": "Official full exact name of the place in ${cityName}",
       "category": "precise category (cathedral/museum/square/palace/garden/market/neighborhood/church/etc)",
-      "reason": "Why it's essential on this route: 1-2 fascinating, specific historical or cultural facts — not generic",
-      "insiderTip": "Practical, concrete tip: best time to visit, free entry, detail few people know, what to order, where to sit — specific to this place in ${cityName}. null if nothing relevant."
+      "reason": "Why it's essential on this route: 1-2 fascinating, specific historical or cultural facts",
+      "insiderTip": "Practical, concrete tip: best time to visit, free entry, detail few people know, what to order, where to sit. null if nothing relevant."
     }
   ]
 }`
 
   try {
-    const text = await callAI(system, user, getAIKey(userKey), 1500)
+    const text = await callAI(system, user, getAIKey(userKey), 1800)
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
-    return JSON.parse(jsonMatch[0]) as AIRouteResult
+    const result = JSON.parse(jsonMatch[0]) as AIRouteResult
+    // Basic validation
+    if (!result.suggestedPOIs || !Array.isArray(result.suggestedPOIs)) return null
+    return result
   } catch (err) {
     console.error('AI route generation error:', err)
     return null
   }
 }
 
-/** Generate a professional audio narration for a POI (Civitatis style) */
+/** Generate a natural, conversational audio narration for a POI (live tour guide style) */
 export async function generateAIAudioScript(
   poiName: string,
   category: string,
@@ -248,28 +282,53 @@ export async function generateAIAudioScript(
 ): Promise<string | null> {
   const system =
     lang === 'es'
-      ? `Eres un guía turístico profesional apasionado, al estilo de Civitatis. Tu voz es cálida, cercana y entusiasta. Hablas en español de España con "tú". No lees datos: compartes tu amor por el lugar. Usas pausas naturales con comas, puntos y frases cortas.`
-      : `You are a passionate professional tour guide, Civitatis style. Your voice is warm and enthusiastic. You share love for the place, not just facts. Use natural pauses with commas, periods and short sentences.`
+      ? `Eres un guía turístico apasionado y carismático, como los mejores guías de Civitatis o Rick Steves en español. Tu estilo de narración es completamente CONVERSACIONAL y VIVO:
+- Hablas directamente al visitante: "Fíjate en...", "Levanta la vista y verás...", "¿Sabes lo que pasó aquí?"
+- Usas preguntas retóricas para crear suspense: "¿Te imaginas lo que fue...?"
+- Das datos concretos y sorprendentes con entusiasmo, no como un libro de texto
+- Tienes sentido del humor y cariño por los lugares
+- Usas frases cortas y pausas dramáticas con puntos y comas
+- Tuteas siempre, en español de España
+- Nunca suenas como Wikipedia — suenas como alguien que ama este lugar`
+      : `You are a passionate and charismatic tour guide, like the best Civitatis or Rick Steves guides. Your narration style is completely CONVERSATIONAL and LIVELY:
+- Address the visitor directly: "Look at...", "Raise your eyes and you'll see...", "Do you know what happened here?"
+- Use rhetorical questions to build suspense: "Can you imagine what it was like...?"
+- Share concrete, surprising facts with enthusiasm, not like a textbook
+- You have warmth and humor
+- Short sentences and dramatic pauses with periods and commas
+- Never sound like Wikipedia — sound like someone who loves this place`
 
   const user =
     lang === 'es'
-      ? `Genera la narración de audio al llegar a "${poiName}" (${category}).
+      ? `Genera la narración de audio AL LLEGAR a "${poiName}" (${category}).
 
-${wikiDescription ? `Descripción: ${wikiDescription.slice(0, 400)}` : ''}
+${wikiDescription ? `Contexto histórico: ${wikiDescription.slice(0, 350)}` : ''}
 ${reason ? `Por qué es especial: ${reason}` : ''}
 ${insiderTip ? `Dato insider: ${insiderTip}` : ''}
 
-Narración de 180-230 palabras: abre con bienvenida natural, 2-3 datos fascinantes conversacionales, si hay insider tip añádelo con "Poca gente sabe que...", termina con "Cuando estés listo/a, seguimos...". SOLO la narración, sin comillas ni encabezados.`
-      : `Generate audio narration arriving at "${poiName}" (${category}).
+ESTRUCTURA OBLIGATORIA:
+1. Abre con algo que capture atención AL INSTANTE: una pregunta sorprendente, una imagen vívida, o un dato impactante. NO empieces con "Bienvenido" ni "Aquí estamos".
+2. Cuenta 1-2 datos fascinantes y concretos de forma conversacional, como si se los contaras a un amigo
+3. Si hay insider tip, preséntalo como un secreto exclusivo: "Poca gente lo sabe, pero..."
+4. Cierra con algo que invite a disfrutar el momento: "Tómate un minuto para...", "Antes de seguir, mira hacia..."
 
-${wikiDescription ? `Description: ${wikiDescription.slice(0, 400)}` : ''}
-${reason ? `Why special: ${reason}` : ''}
+120-160 palabras. SOLO la narración, sin comillas, sin títulos, sin guiones. Voz viva, apasionada, personal.`
+      : `Generate audio narration ARRIVING AT "${poiName}" (${category}).
+
+${wikiDescription ? `Historical context: ${wikiDescription.slice(0, 350)}` : ''}
+${reason ? `Why it's special: ${reason}` : ''}
 ${insiderTip ? `Insider tip: ${insiderTip}` : ''}
 
-180-230 word narration: natural welcome, 2-3 conversational facts, if insider tip add "Not many people know that...", end with "Whenever you're ready, we'll move on...". ONLY the narration, no quotes or headings.`
+REQUIRED STRUCTURE:
+1. Open with something that grabs attention INSTANTLY: a surprising question, a vivid image, or a shocking fact. Do NOT start with "Welcome" or "Here we are".
+2. Share 1-2 fascinating, concrete facts conversationally, as if telling a friend
+3. If there's an insider tip, present it as an exclusive secret: "Not many people know that..."
+4. Close with something that invites them to enjoy the moment: "Take a minute to...", "Before we move on, look towards..."
+
+120-160 words. ONLY the narration, no quotes, no titles, no dashes. Lively, passionate, personal voice.`
 
   try {
-    return await callAI(system, user, getAIKey(userKey), 600)
+    return await callAI(system, user, getAIKey(userKey), 500)
   } catch (err) {
     console.error('AI audio script error:', err)
     return null
@@ -281,11 +340,14 @@ export async function validateApiKey(apiKey: string): Promise<boolean> {
   const key = apiKey?.trim()
   if (!key) return false
   try {
-    const resp = await fetch(MISTRAL_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({ model: MISTRAL_MODEL, max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
-    })
+    const resp = await withTimeout(
+      fetch(MISTRAL_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+        body: JSON.stringify({ model: MISTRAL_MODEL, max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
+      }),
+      10000
+    )
     return resp.ok
   } catch {
     return false

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
-import { validateApiKey, hasBuiltInKey } from '../services/ai'
+import { validateApiKey, hasBuiltInKey, activeEngine } from '../services/ai'
 
 export function SettingsPage() {
   const navigate = useNavigate()
@@ -40,6 +40,7 @@ export function SettingsPage() {
   }
 
   const es = language === 'es'
+  const engine = activeEngine(anthropicApiKey)
 
   return (
     <div className="min-h-screen bg-stone-50 safe-top">
@@ -69,20 +70,51 @@ export function SettingsPage() {
             </h2>
           </div>
 
-          {/* AI always active via Pollinations */}
-          <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 mb-4 border border-green-100">
+          {/* Active AI engine badge */}
+          <div className={`rounded-2xl p-4 mb-4 border ${
+            engine === 'mistral_user' ? 'bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-200' :
+            engine === 'mistral_builtin' ? 'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200' :
+            'bg-gradient-to-br from-green-50 to-emerald-50 border-green-100'
+          }`}>
             <div className="flex items-center gap-3 mb-2">
-              <span className="text-2xl">✅</span>
-              <p className="text-green-800 font-bold text-sm">
-                {es ? 'IA integrada y activa — sin configurar nada' : 'AI built-in and active — no setup needed'}
+              <span className="text-2xl">
+                {engine === 'mistral_user' ? '🟣' : engine === 'mistral_builtin' ? '🔵' : '✅'}
+              </span>
+              <p className={`font-bold text-sm ${
+                engine === 'mistral_user' ? 'text-purple-800' :
+                engine === 'mistral_builtin' ? 'text-blue-800' :
+                'text-green-800'
+              }`}>
+                {engine === 'mistral_user'
+                  ? (es ? 'Usando tu clave Mistral AI' : 'Using your Mistral AI key')
+                  : engine === 'mistral_builtin'
+                  ? (es ? 'Usando Mistral AI integrado' : 'Using built-in Mistral AI')
+                  : (es ? 'IA gratuita activa — sin configurar nada' : 'Free AI active — no setup needed')}
               </p>
             </div>
-            <ul className="text-sm text-green-700 space-y-1 ml-9">
+            <ul className={`text-sm space-y-1 ml-9 ${
+              engine === 'mistral_user' ? 'text-purple-700' :
+              engine === 'mistral_builtin' ? 'text-blue-700' :
+              'text-green-700'
+            }`}>
               <li>• {es ? 'Rutas curadas estilo Civitatis · narraciones apasionadas' : 'Civitatis-style curated routes · passionate narrations'}</li>
-              <li>• {es ? 'Funciona sin cuenta ni clave API' : 'Works without any account or API key'}</li>
-              <li>• {es ? 'Motor: Pollinations.ai (GPT-4o-mini gratuito)' : 'Engine: Pollinations.ai (free GPT-4o-mini)'}</li>
+              <li>• {engine === 'pollinations'
+                ? (es ? 'Motor: Pollinations.ai (GPT-4o-mini gratuito, sin cuenta)' : 'Engine: Pollinations.ai (free GPT-4o-mini, no account)')
+                : (es ? 'Motor: Mistral AI open-mistral-nemo · máxima fiabilidad' : 'Engine: Mistral AI open-mistral-nemo · maximum reliability')
+              }</li>
             </ul>
           </div>
+
+          {/* Built-in key info if env key active */}
+          {hasBuiltInKey() && engine !== 'mistral_user' && (
+            <div className="bg-blue-50 rounded-2xl px-4 py-3 mb-4 border border-blue-100">
+              <p className="text-blue-700 text-xs">
+                {es
+                  ? '🔒 Clave Mistral integrada por el desarrollador. No necesitas añadir la tuya.'
+                  : '🔒 Mistral key built-in by the developer. No need to add your own.'}
+              </p>
+            </div>
+          )}
 
           {/* Optional Mistral key upgrade */}
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100">
@@ -112,16 +144,30 @@ export function SettingsPage() {
             </div>
 
             {validationResult === 'ok' && (
-              <p className="text-green-600 text-sm mb-3 flex items-center gap-1.5">
+              <div className="bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 mb-3 flex items-center gap-2">
                 <span>✅</span>
-                {es ? 'Clave Mistral activa' : 'Mistral key active'}
-              </p>
+                <div>
+                  <p className="text-green-700 text-sm font-semibold">
+                    {es ? '¡Clave Mistral guardada y activa!' : 'Mistral key saved and active!'}
+                  </p>
+                  <p className="text-green-600 text-xs">
+                    {es ? 'La app usará Mistral AI para todas las rutas y narraciones.' : 'The app will use Mistral AI for all routes and narrations.'}
+                  </p>
+                </div>
+              </div>
             )}
             {validationResult === 'error' && (
-              <p className="text-red-600 text-sm mb-3 flex items-center gap-1.5">
+              <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 mb-3 flex items-center gap-2">
                 <span>❌</span>
-                {es ? 'Clave inválida.' : 'Invalid key.'}
-              </p>
+                <div>
+                  <p className="text-red-700 text-sm font-semibold">
+                    {es ? 'Clave inválida o sin conexión' : 'Invalid key or no connection'}
+                  </p>
+                  <p className="text-red-600 text-xs">
+                    {es ? 'Verifica la clave en console.mistral.ai' : 'Check your key at console.mistral.ai'}
+                  </p>
+                </div>
+              </div>
             )}
 
             <div className="flex gap-2">
