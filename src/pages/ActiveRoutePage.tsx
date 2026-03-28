@@ -269,9 +269,14 @@ export function ActiveRoutePage() {
                       {language === 'es' ? 'Punto más cercano a mí' : 'Nearest point to me'}
                     </p>
                     <p className="text-stone-400 text-sm truncate">{nearestPOI.name}</p>
-                    {distToNearest !== null && (
+                    {distToNearest !== null ? (
                       <p className="text-orange-400 text-xs mt-0.5">
                         {formatDist(distToNearest)} {language === 'es' ? 'de distancia' : 'away'}
+                      </p>
+                    ) : (
+                      <p className="text-stone-500 text-xs mt-0.5 flex items-center gap-1">
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border border-stone-500 border-t-transparent" />
+                        {language === 'es' ? 'Buscando GPS...' : 'Getting GPS...'}
                       </p>
                     )}
                   </div>
@@ -408,6 +413,37 @@ export function ActiveRoutePage() {
           </button>
         </div>
 
+        {/* Navigation panel - OUTSIDE map container so z-index works correctly */}
+        <div className="px-3 pb-2 bg-stone-900">
+          <NavigationPanel
+            currentStep={currentNavStep}
+            nextStep={nextNavStep ?? undefined}
+            remainingDistance={currentSegment?.distance}
+            remainingTime={currentSegment?.duration}
+            targetPOIName={currentPOI?.name}
+          />
+          {navSteps.length > 1 && (
+            <div className="flex gap-2 mt-1.5">
+              {currentStepIndex > 0 && (
+                <button
+                  onClick={() => setCurrentStepIndex(i => i - 1)}
+                  className="flex-1 bg-stone-800 text-white text-xs py-2 rounded-xl"
+                >
+                  ← {language === 'es' ? 'Anterior' : 'Previous'}
+                </button>
+              )}
+              {currentStepIndex < navSteps.length - 1 && (
+                <button
+                  onClick={() => setCurrentStepIndex(i => i + 1)}
+                  className="flex-1 bg-stone-800 text-white text-xs py-2 rounded-xl"
+                >
+                  {language === 'es' ? 'Siguiente' : 'Next'} →
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Map */}
         <div className="flex-1 relative">
           <MapView
@@ -426,41 +462,10 @@ export function ActiveRoutePage() {
               style={{ width: `${((currentPOIIndex + 1) / pois.length) * 100}%` }}
             />
           </div>
-
-          {/* Navigation panel */}
-          <div className="absolute top-2 left-2 right-2 z-10">
-            <NavigationPanel
-              currentStep={currentNavStep}
-              nextStep={nextNavStep ?? undefined}
-              remainingDistance={currentSegment?.distance}
-              remainingTime={currentSegment?.duration}
-              targetPOIName={currentPOI?.name}
-            />
-            {navSteps.length > 1 && (
-              <div className="flex gap-2 mt-1">
-                {currentStepIndex > 0 && (
-                  <button
-                    onClick={() => setCurrentStepIndex(i => i - 1)}
-                    className="flex-1 bg-stone-800/90 text-white text-xs py-2 rounded-xl"
-                  >
-                    ← {language === 'es' ? 'Anterior' : 'Previous'}
-                  </button>
-                )}
-                {currentStepIndex < navSteps.length - 1 && (
-                  <button
-                    onClick={() => setCurrentStepIndex(i => i + 1)}
-                    className="flex-1 bg-stone-800/90 text-white text-xs py-2 rounded-xl"
-                  >
-                    {language === 'es' ? 'Siguiente' : 'Next'} →
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Bottom: arrival actions */}
-        <div className="bg-stone-900 px-4 pt-3 pb-safe-bottom pb-4 safe-bottom">
+        <div className="bg-stone-900 px-4 pt-3 pb-4 safe-bottom">
           {/* Distance bar */}
           {distanceToPOI !== null && (
             <div className="flex items-center gap-2 mb-3">
@@ -473,6 +478,19 @@ export function ActiveRoutePage() {
               <span className="text-stone-300 text-xs w-12 text-right">{formatDist(distanceToPOI)}</span>
             </div>
           )}
+
+          {/* Route stops toggle */}
+          <button
+            onClick={() => setShowManualList(true)}
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-stone-800 rounded-xl mb-3 text-stone-300"
+          >
+            <span className="text-sm font-medium">
+              {language === 'es' ? `📋 Paradas de la ruta (${pois.length})` : `📋 Route stops (${pois.length})`}
+            </span>
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
 
           {distanceToPOI !== null && distanceToPOI < 200 ? (
             <button
@@ -490,6 +508,62 @@ export function ActiveRoutePage() {
             </button>
           )}
         </div>
+
+        {/* Route stops list sheet */}
+        <BottomSheet
+          isOpen={showManualList}
+          onClose={() => setShowManualList(false)}
+          title={language === 'es' ? 'Paradas de la ruta' : 'Route stops'}
+          snapPoints="full"
+        >
+          <div className="flex flex-col gap-2">
+            {pois.map((poi, idx) => {
+              const dist = userLocation
+                ? Math.round(calculateDistance(userLocation[0], userLocation[1], poi.lat, poi.lon))
+                : null
+              const isCurrentStop = idx === currentPOIIndex
+              const isPastStop = idx < currentPOIIndex
+              return (
+                <button
+                  key={poi.id}
+                  onClick={() => { setShowManualList(false); setCurrentPOIIndex(idx); setPhase('navigating') }}
+                  className={`flex items-center gap-3 p-4 rounded-2xl text-left transition-all ${
+                    isCurrentStop
+                      ? 'bg-orange-50 border-2 border-orange-400'
+                      : isPastStop
+                      ? 'bg-stone-50 opacity-60'
+                      : 'bg-stone-50'
+                  }`}
+                >
+                  {poi.imageUrl ? (
+                    <img src={poi.imageUrl} alt={poi.name} className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
+                  ) : (
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                      isCurrentStop ? 'bg-orange-500' : isPastStop ? 'bg-stone-300' : 'bg-stone-200'
+                    }`}>
+                      {isPastStop
+                        ? <span className="text-white text-lg">✓</span>
+                        : <span className={`text-lg font-black ${isCurrentStop ? 'text-white' : 'text-stone-500'}`}>{idx + 1}</span>
+                      }
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className={`font-bold truncate ${isCurrentStop ? 'text-orange-700' : 'text-stone-800'}`}>{poi.name}</p>
+                    <p className="text-stone-400 text-xs capitalize">{poi.category}</p>
+                    {isCurrentStop && (
+                      <p className="text-orange-500 text-xs font-medium mt-0.5">
+                        {language === 'es' ? '← Parada actual' : '← Current stop'}
+                      </p>
+                    )}
+                  </div>
+                  {dist !== null && (
+                    <p className="text-stone-400 text-xs flex-shrink-0">{formatDist(dist)}</p>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </BottomSheet>
 
         {/* Offline download */}
         {showDownload && (

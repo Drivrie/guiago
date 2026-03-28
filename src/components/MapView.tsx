@@ -35,9 +35,10 @@ export function MapView({ pois, route, currentPOIIndex = 0, userLocation, onPOIC
       attributionControl: false,
     })
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap'
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 20,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
     }).addTo(map)
 
     L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map)

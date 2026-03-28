@@ -61,7 +61,6 @@ export function CitySearch() {
         value={query}
         onChange={v => { setQuery(v); if (v.length >= 2) setShowResults(true) }}
         onClear={() => { setResults([]); setShowResults(false) }}
-        autoFocus
       />
 
       {loading && (
