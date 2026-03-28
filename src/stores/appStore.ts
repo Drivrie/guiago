@@ -158,6 +158,9 @@ export const useAppStore = create<AppStore>()(
         audioRate: state.audioRate,
         anthropicApiKey: state.anthropicApiKey,
         visitedPOIs: state.visitedPOIs,
+        currentRoute: state.currentRoute,
+        pois: state.pois,
+        currentPOIIndex: state.currentPOIIndex,
       }),
     }
   )

@@ -95,7 +95,7 @@ export async function searchPOIsWikipedia(
       action: 'query',
       list: 'geosearch',
       gscoord: `${city.lat}|${city.lon}`,
-      gsradius: '5000',
+      gsradius: '3000',
       gslimit: '50',
       format: 'json',
       origin: '*',
@@ -234,7 +234,7 @@ export async function searchPOIByName(
     let lon = city.lon
     if (coords) {
       const dist = Math.sqrt(Math.pow(coords.lat - city.lat, 2) + Math.pow(coords.lon - city.lon, 2))
-      if (dist < 0.5) { lat = coords.lat; lon = coords.lon }
+      if (dist < 0.15) { lat = coords.lat; lon = coords.lon }
     }
 
     const extract = cleanHtml(page.extract || '')

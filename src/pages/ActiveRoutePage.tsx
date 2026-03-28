@@ -10,7 +10,7 @@ import { useAppStore } from '../stores/appStore'
 import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
 import { getAudioScript } from '../services/storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance } from '../services/routing'
+import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute } from '../services/routing'
 import { stop as stopTTS } from '../services/tts'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
@@ -18,7 +18,9 @@ import type { RouteSegment, POI } from '../types'
 type GuidePhase = 'selecting_start' | 'navigating' | 'at_poi' | 'post_poi' | 'complete'
 
 function fallbackSegment(from: POI, to: POI): RouteSegment {
-  return { from, to, steps: [], distance: 0, duration: 0, geometry: [[from.lon, from.lat], [to.lon, to.lat]] }
+  const direct = getDirectRoute(from, to)
+  const steps = getStepByStepInstructions(direct)
+  return { from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] }
 }
 
 export function ActiveRoutePage() {
@@ -605,7 +607,7 @@ export function ActiveRoutePage() {
           {/* Back to navigation */}
           <button
             onClick={() => { stopTTS(); setPhase('navigating') }}
-            className="absolute top-4 left-4 mt-safe-top w-10 h-10 bg-black/30 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
+            className="absolute top-[max(1rem,env(safe-area-inset-top))] left-4 w-10 h-10 bg-black/30 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -613,7 +615,7 @@ export function ActiveRoutePage() {
           </button>
 
           {/* Stop number */}
-          <div className="absolute top-4 right-4 mt-safe-top bg-orange-500 rounded-xl px-3 py-1.5 shadow">
+          <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 bg-orange-500 rounded-xl px-3 py-1.5 shadow">
             <span className="text-white font-black text-sm">{currentPOIIndex + 1}/{pois.length}</span>
           </div>
 

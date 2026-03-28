@@ -10,7 +10,7 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, orderPOIsOptimally } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
@@ -210,10 +210,15 @@ export function RouteSetupPage() {
             totalDistance += result.distance
             totalDuration += result.duration
           } else {
-            segments.push({ from, to, steps: [], distance: 0, duration: 0, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
+            // OSRM failed — use direct compass navigation as fallback
+            const direct = getDirectRoute(from, to)
+            const steps = getStepByStepInstructions(direct)
+            segments.push({ from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
           }
         } catch {
-          segments.push({ from, to, steps: [], distance: 0, duration: 0, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
+            const direct = getDirectRoute(from, to)
+            const steps = getStepByStepInstructions(direct)
+            segments.push({ from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
         }
       }
 
