@@ -180,6 +180,50 @@ export function getStepByStepInstructions(routeResult: RouteResult): NavigationS
   return steps
 }
 
+/** Creates a simple direct navigation segment when OSRM routing fails */
+export function getDirectRoute(from: { lat: number; lon: number }, to: { lat: number; lon: number }): RouteResult {
+  const dist = calculateDistance(from.lat, from.lon, to.lat, to.lon)
+
+  // Calculate bearing for direction arrow
+  const dLon = (to.lon - from.lon) * Math.PI / 180
+  const lat1 = from.lat * Math.PI / 180
+  const lat2 = to.lat * Math.PI / 180
+  const y = Math.sin(dLon) * Math.cos(lat2)
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon)
+  const bearingDeg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+
+  let direction: 'straight' | 'slight_left' | 'slight_right' | 'left' | 'right' = 'straight'
+  if (bearingDeg > 337.5 || bearingDeg <= 22.5) direction = 'straight'
+  else if (bearingDeg <= 67.5) direction = 'slight_right'
+  else if (bearingDeg <= 112.5) direction = 'right'
+  else if (bearingDeg <= 157.5) direction = 'slight_right'
+  else if (bearingDeg <= 202.5) direction = 'straight'
+  else if (bearingDeg <= 247.5) direction = 'slight_left'
+  else if (bearingDeg <= 292.5) direction = 'left'
+  else direction = 'slight_left'
+
+  const instruction = `Dirígete ${dist > 500 ? `${(dist/1000).toFixed(1)} km` : `${Math.round(dist)} m`} hacia el destino`
+  const icon = direction === 'left' ? '↰' : direction === 'right' ? '↱' : '↑'
+
+  void icon // used indirectly via maneuver modifier in getStepByStepInstructions
+  return {
+    distance: dist,
+    duration: dist / 1.4,
+    geometry: { type: 'LineString', coordinates: [[from.lon, from.lat], [to.lon, to.lat]] },
+    legs: [{
+      distance: { value: dist, text: formatDistance(dist) },
+      duration: { value: dist / 1.4, text: `${Math.round(dist / 84)} min` },
+      steps: [{
+        distance: { value: dist, text: formatDistance(dist) },
+        duration: { value: dist / 1.4, text: `${Math.round(dist / 84)} min` },
+        instruction,
+        maneuver: { type: 'depart', modifier: direction, location: [from.lon, from.lat] as [number, number] },
+        geometry: undefined,
+      }]
+    }]
+  }
+}
+
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)} seg`
   const minutes = Math.round(seconds / 60)

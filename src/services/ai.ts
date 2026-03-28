@@ -176,41 +176,51 @@ export async function generateAIRoute(
 
   const user =
     lang === 'es'
-      ? `Diseña una ruta turística de calidad profesional para ${cityName}:
+      ? `Diseña una ruta turística de MÁXIMA CALIDAD para ${cityName}:
 - Temática: ${typeDesc}
-- Duración total: ${durationMinutes} minutos de visita
+- Duración total de visita: ${durationMinutes} minutos (sin contar desplazamientos)
 - Número de paradas: ${maxPOIs}${excludeClause}
 
-La ruta debe ser como las de Civitatis: coherente temáticamente, con un hilo narrativo claro, lugares reales y verificables.
+REQUISITOS ESTRICTOS (al nivel de Civitatis o Walkative):
+1. TODOS los lugares deben estar en ${cityName} — no en pueblos o ciudades cercanas
+2. Orden optimizado para caminar sin rodeos innecesarios
+3. Coherencia temática perfecta — cada parada refuerza el hilo narrativo
+4. Información histórica específica y verificable, no genérica
+5. Consejos insider reales: horarios óptimos, entradas, trucos locales, qué evitar
 
-JSON exacto a devolver (sin texto fuera del JSON):
+JSON exacto (sin texto fuera del JSON):
 {
-  "routeStory": "Descripción evocadora de la ruta en 2-3 frases",
+  "routeStory": "Narrativa de apertura evocadora en 2-3 frases: describe la atmósfera, el hilo conductor y por qué esta ruta es especial. Estilo literario, apasionado, que invite a explorar.",
   "suggestedPOIs": [
     {
-      "name": "Nombre oficial completo y exacto del lugar",
-      "category": "categoría (catedral/museo/plaza/palacio/jardín/etc)",
-      "reason": "Por qué es imprescindible: historia o dato en 1-2 frases",
-      "insiderTip": "Consejo práctico no habitual en guías (string o null)"
+      "name": "Nombre oficial completo y exacto del lugar en ${cityName}",
+      "category": "categoría precisa (catedral/museo/plaza/palacio/jardín/mercado/barrio/iglesia/etc)",
+      "reason": "Por qué es imprescindible en esta ruta: 1-2 datos históricos o culturales fascinantes y específicos, no genéricos",
+      "insiderTip": "Consejo práctico y concreto: hora mejor para visitar, entrada gratuita, detalle que pocos conocen, qué pedir, dónde sentarse — específico para este lugar en ${cityName}. null si no hay nada relevante."
     }
   ]
 }`
-      : `Design a professional-quality tour for ${cityName}:
+      : `Design a MAXIMUM QUALITY tour for ${cityName}:
 - Theme: ${typeDesc}
-- Total duration: ${durationMinutes} minutes
+- Total visit duration: ${durationMinutes} minutes (excluding walking)
 - Number of stops: ${maxPOIs}${excludeClause}
 
-Like Civitatis: thematically coherent, clear narrative thread, real verifiable places.
+STRICT REQUIREMENTS (Civitatis / Walkative level):
+1. ALL places must be located IN ${cityName} — not nearby towns or cities
+2. Optimized walking order — no unnecessary backtracking
+3. Perfect thematic coherence — every stop reinforces the narrative thread
+4. Specific, verifiable historical information — not generic descriptions
+5. Real insider tips: optimal visit times, tickets, local tricks, what to avoid
 
-Exact JSON to return (no text outside the JSON):
+Exact JSON (no text outside JSON):
 {
-  "routeStory": "Evocative route description in 2-3 sentences",
+  "routeStory": "Evocative opening narrative in 2-3 sentences: describe the atmosphere, the connecting thread, why this route is special. Literary, passionate style that invites exploration.",
   "suggestedPOIs": [
     {
-      "name": "Official full exact name of the place",
-      "category": "exact category (cathedral/museum/square/palace/garden/etc)",
-      "reason": "Why it's essential: key history or fact in 1-2 sentences",
-      "insiderTip": "Practical tip not usually in tourist guides (string or null)"
+      "name": "Official full exact name of the place in ${cityName}",
+      "category": "precise category (cathedral/museum/square/palace/garden/market/neighborhood/church/etc)",
+      "reason": "Why it's essential on this route: 1-2 fascinating, specific historical or cultural facts — not generic",
+      "insiderTip": "Practical, concrete tip: best time to visit, free entry, detail few people know, what to order, where to sit — specific to this place in ${cityName}. null if nothing relevant."
     }
   ]
 }`
