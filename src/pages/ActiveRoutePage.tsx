@@ -9,6 +9,7 @@ import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
 import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
 import { getAudioScript } from '../services/storage'
+import { generateAIAudioScript } from '../services/ai'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance } from '../services/routing'
 import { stop as stopTTS } from '../services/tts'
 import { ROUTE_TYPE_INFO } from '../types'
@@ -24,7 +25,7 @@ export function ActiveRoutePage() {
   const navigate = useNavigate()
   const {
     language, currentRoute, pois, currentPOIIndex, setCurrentPOIIndex,
-    setPOIs, setRoute
+    setPOIs, setRoute, anthropicApiKey, markPOIsVisited
   } = useAppStore()
 
   const [phase, setPhase] = useState<GuidePhase>('selecting_start')
@@ -90,21 +91,39 @@ export function ActiveRoutePage() {
     }
   }, [userLocation, phase, currentPOIIndex])
 
-  // ---- Load audio when entering at_poi ----
+  // ---- Load audio when entering at_poi (AI-enhanced when key available) ----
   useEffect(() => {
     if (phase !== 'at_poi' || !currentPOI) return
     setAudioLoading(true)
     setAudioScript('')
-    getAudioScript(currentPOI.id, language).then(cached => {
+
+    async function loadAudio() {
+      // 1. Try offline cache first
+      const cached = await getAudioScript(currentPOI!.id, language)
       if (cached) { setAudioScript(cached); setAudioLoading(false); return }
-      getPOIDescription(currentPOI.name, language).then(desc => {
-        setAudioScript(generateAudioScript(
-          { name: currentPOI.name, category: currentPOI.category, description: desc || undefined },
-          language
-        ))
-        setAudioLoading(false)
-      })
-    })
+
+      // 2. Fetch Wikipedia description
+      const desc = await getPOIDescription(currentPOI!.name, language)
+
+      // 3. If AI key available, use Claude for professional narration
+      if (anthropicApiKey) {
+        const insiderTip = currentPOI!.tags?.['insiderTip'] || undefined
+        const reason = currentPOI!.shortDescription || ''
+        const aiScript = await generateAIAudioScript(
+          currentPOI!.name, currentPOI!.category, desc || '', reason, insiderTip, language, anthropicApiKey
+        )
+        if (aiScript) { setAudioScript(aiScript); setAudioLoading(false); return }
+      }
+
+      // 4. Fallback to template-based script
+      setAudioScript(generateAudioScript(
+        { name: currentPOI!.name, category: currentPOI!.category, description: desc || undefined },
+        language
+      ))
+      setAudioLoading(false)
+    }
+
+    loadAudio()
   }, [phase, currentPOI?.id])
 
   // ---- Reset step index on POI change ----
@@ -149,6 +168,10 @@ export function ActiveRoutePage() {
   function advanceToNext() {
     stopTTS()
     if (isLast) {
+      // Mark all POIs in this route as visited
+      if (currentRoute) {
+        markPOIsVisited(currentRoute.city.id, pois.map(p => p.name))
+      }
       setPhase('complete')
     } else {
       setCurrentPOIIndex(currentPOIIndex + 1)

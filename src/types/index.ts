@@ -1,6 +1,8 @@
 export type Language = 'es' | 'en'
 
 export type RouteType =
+  | 'imprescindibles'
+  | 'secretos_locales'
   | 'monumental'
   | 'historia_negra'
   | 'curiosidades'
@@ -182,6 +184,24 @@ export interface RouteTypeInfo {
 }
 
 export const ROUTE_TYPE_INFO: RouteTypeInfo[] = [
+  {
+    id: 'imprescindibles',
+    labelEs: 'Imprescindibles',
+    labelEn: 'Must-See',
+    descriptionEs: 'Los lugares que no puedes perderte bajo ningún concepto',
+    descriptionEn: 'The places you absolutely cannot miss',
+    icon: '⭐',
+    color: '#F59E0B'
+  },
+  {
+    id: 'secretos_locales',
+    labelEs: 'Secretos Locales',
+    labelEn: 'Local Secrets',
+    descriptionEs: 'Rincones ocultos y joyas escondidas que solo conocen los locales',
+    descriptionEn: 'Hidden corners and gems only locals know about',
+    icon: '🗝️',
+    color: '#6366F1'
+  },
   {
     id: 'monumental',
     labelEs: 'Monumental',

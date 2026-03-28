@@ -7,6 +7,10 @@ interface AppStore {
   language: Language
   setLanguage: (lang: Language) => void
 
+  // AI
+  anthropicApiKey: string
+  setAnthropicApiKey: (key: string) => void
+
   // City
   selectedCity: City | null
   setCity: (city: City | null) => void
@@ -50,6 +54,12 @@ interface AppStore {
   // Offline
   isOffline: boolean
   setOffline: (offline: boolean) => void
+
+  // Visit history: cityId → POI names visited
+  visitedPOIs: Record<string, string[]>
+  markPOIsVisited: (cityId: string, poiNames: string[]) => void
+  getVisitedPOINames: (cityId: string) => string[]
+  clearVisitHistory: (cityId?: string) => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -57,6 +67,9 @@ export const useAppStore = create<AppStore>()(
     (set, get) => ({
       language: 'es',
       setLanguage: (language) => set({ language }),
+
+      anthropicApiKey: '',
+      setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
 
       selectedCity: null,
       setCity: (city) => {
@@ -111,6 +124,24 @@ export const useAppStore = create<AppStore>()(
 
       isOffline: !navigator.onLine,
       setOffline: (offline) => set({ isOffline: offline }),
+
+      visitedPOIs: {},
+      markPOIsVisited: (cityId, poiNames) => {
+        const current = get().visitedPOIs
+        const existing = current[cityId] || []
+        const merged = Array.from(new Set([...existing, ...poiNames]))
+        set({ visitedPOIs: { ...current, [cityId]: merged } })
+      },
+      getVisitedPOINames: (cityId) => get().visitedPOIs[cityId] || [],
+      clearVisitHistory: (cityId) => {
+        if (cityId) {
+          const current = { ...get().visitedPOIs }
+          delete current[cityId]
+          set({ visitedPOIs: current })
+        } else {
+          set({ visitedPOIs: {} })
+        }
+      },
     }),
     {
       name: 'guiago-store',
@@ -118,6 +149,8 @@ export const useAppStore = create<AppStore>()(
         language: state.language,
         recentCities: state.recentCities,
         audioRate: state.audioRate,
+        anthropicApiKey: state.anthropicApiKey,
+        visitedPOIs: state.visitedPOIs,
       }),
     }
   )

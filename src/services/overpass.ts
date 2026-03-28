@@ -20,6 +20,39 @@ function buildOverpassQuery(city: City, routeType: RouteType): string {
   let tagFilters = ''
 
   switch (routeType) {
+    case 'imprescindibles':
+      // Broad: top landmarks, museums, major attractions
+      tagFilters = `
+        node["historic"~"monument|castle|palace|cathedral|fort|archaeological_site"](around:${radius},${lat},${lon});
+        way["historic"~"monument|castle|palace|cathedral|fort|archaeological_site"](around:${radius},${lat},${lon});
+        node["tourism"="museum"](around:${radius},${lat},${lon});
+        way["tourism"="museum"](around:${radius},${lat},${lon});
+        node["tourism"="attraction"](around:${radius},${lat},${lon});
+        way["tourism"="attraction"](around:${radius},${lat},${lon});
+        node["building"~"cathedral|church|palace|castle"](around:${radius},${lat},${lon});
+        way["building"~"cathedral|church|palace|castle"](around:${radius},${lat},${lon});
+        node["leisure"="park"]["name"](around:${radius},${lat},${lon});
+        way["leisure"="park"]["name"](around:${radius},${lat},${lon});
+      `
+      break
+
+    case 'secretos_locales':
+      // Hidden gems: local markets, lesser-known historic spots, quirky attractions
+      tagFilters = `
+        node["tourism"="artwork"](around:${radius},${lat},${lon});
+        node["amenity"="marketplace"](around:${radius},${lat},${lon});
+        way["amenity"="marketplace"](around:${radius},${lat},${lon});
+        node["historic"~"milestone|boundary_stone|wayside_shrine|water_pump"](around:${radius},${lat},${lon});
+        node["man_made"~"clock|water_tower|windmill|tower"](around:${radius},${lat},${lon});
+        way["man_made"~"clock|water_tower|windmill|tower"](around:${radius},${lat},${lon});
+        node["tourism"="viewpoint"](around:${radius},${lat},${lon});
+        node["amenity"="fountain"]["name"](around:${radius},${lat},${lon});
+        node["artwork_type"~"sculpture|mural|installation|mosaic"](around:${radius},${lat},${lon});
+        node["leisure"="garden"]["name"](around:${radius},${lat},${lon});
+        way["leisure"="garden"]["name"](around:${radius},${lat},${lon});
+      `
+      break
+
     case 'monumental':
       tagFilters = `
         node["historic"~"monument|castle|ruins|archaeological_site|memorial|city_gate|fort|palace|manor|cathedral"](around:${radius},${lat},${lon});
@@ -144,6 +177,8 @@ function elementToCategory(element: OverpassElement, routeType: RouteType): stri
 
   // Fallback by route type
   const defaults: Record<RouteType, string> = {
+    imprescindibles: 'lugar imprescindible',
+    secretos_locales: 'secreto local',
     monumental: 'monumento',
     historia_negra: 'lugar histórico',
     curiosidades: 'curiosidad',
@@ -157,6 +192,8 @@ function elementToCategory(element: OverpassElement, routeType: RouteType): stri
 function estimateVisitTime(routeType: RouteType, category: string): number {
   // Minutes to spend at each POI
   const base: Record<RouteType, number> = {
+    imprescindibles: 25,
+    secretos_locales: 15,
     monumental: 20,
     historia_negra: 15,
     curiosidades: 10,
