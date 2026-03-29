@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { RouteTypeSelector } from '../components/RouteTypeSelector'
 import { DurationSelector } from '../components/DurationSelector'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
@@ -36,6 +36,7 @@ const POPULAR_SUGGESTIONS = [
 export function RouteSetupPage() {
   const { cityName } = useParams<{ cityName: string }>()
   const navigate = useNavigate()
+  const routerLocation = useLocation()
   const {
     language, selectedCity, setCity, selectedRouteType, setRouteType,
     selectedDuration, setDuration, setPOIs, setRoute, setLoading, setError,
@@ -49,6 +50,10 @@ export function RouteSetupPage() {
   const [fallbackInfo, setFallbackInfo] = useState<{ requested: RouteType; found: RouteType } | null>(null)
   const [aiRouteStory, setAiRouteStory] = useState<string | null>(null)
   const [usingAI, setUsingAI] = useState(false)
+  // Inherit avoidVisited from TodayPage nav state if present, default true
+  const [avoidVisited, setAvoidVisited] = useState<boolean>(
+    (routerLocation.state as { avoidVisited?: boolean } | null)?.avoidVisited ?? true
+  )
 
   // Load city from URL param
   useEffect(() => {
@@ -79,7 +84,7 @@ export function RouteSetupPage() {
     setUsingAI(false)
 
     const maxPOIs = Math.max(3, Math.min(12, Math.floor(selectedDuration / 20)))
-    const visitedNames = getVisitedPOINames(selectedCity.id)
+    const visitedNames = avoidVisited ? getVisitedPOINames(selectedCity.id) : []
     const aiAvailable = hasAIKey(anthropicApiKey)
     const aiKey = getAIKey(anthropicApiKey)
 
@@ -295,16 +300,33 @@ export function RouteSetupPage() {
           </div>
         )}
 
-        {/* Visit history notice */}
+        {/* Visit history toggle */}
         {visitedCount > 0 && (
-          <div className="mb-4 bg-blue-50 rounded-2xl px-4 py-3 flex items-center gap-3 border border-blue-100">
-            <span className="text-xl">🔄</span>
-            <p className="text-blue-700 text-sm">
-              {language === 'es'
-                ? `Ya visitaste ${visitedCount} lugares aquí. Tu ruta excluirá los ya vistos.`
-                : `You already visited ${visitedCount} places here. Your route will exclude them.`}
-            </p>
-          </div>
+          <button
+            onClick={() => setAvoidVisited(v => !v)}
+            className={`mb-4 w-full rounded-2xl px-4 py-3 flex items-center gap-3 border text-left transition-all active:scale-95 ${
+              avoidVisited
+                ? 'bg-blue-50 border-blue-200'
+                : 'bg-stone-50 border-stone-200'
+            }`}
+          >
+            <span className="text-xl flex-shrink-0">{avoidVisited ? '✅' : '🔄'}</span>
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm font-semibold ${avoidVisited ? 'text-blue-700' : 'text-stone-600'}`}>
+                {language === 'es'
+                  ? `Evitar los ${visitedCount} lugares ya visitados`
+                  : `Avoid the ${visitedCount} already visited places`}
+              </p>
+              <p className={`text-xs mt-0.5 ${avoidVisited ? 'text-blue-500' : 'text-stone-400'}`}>
+                {avoidVisited
+                  ? (language === 'es' ? 'Activo — la ruta incluirá solo sitios nuevos' : 'On — route will only include new places')
+                  : (language === 'es' ? 'Desactivado — puede repetir lugares ya vistos' : 'Off — may include places you\u2019ve visited')}
+              </p>
+            </div>
+            <div className={`w-11 h-6 rounded-full flex-shrink-0 flex items-center transition-colors px-0.5 ${avoidVisited ? 'bg-blue-500' : 'bg-stone-300'}`}>
+              <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${avoidVisited ? 'translate-x-5' : 'translate-x-0'}`} />
+            </div>
+          </button>
         )}
 
         {/* Fallback notice */}
