@@ -356,35 +356,43 @@ export function ActiveRoutePage() {
             </div>
           ) : (
             <>
-              {/* Option 1: Nearest to GPS */}
+              {/* Option 1: Start from GPS → navigate to first POI */}
               <button
                 onClick={() => userLocation
                   ? reorderAndStart(userLocation[0], userLocation[1])
                   : reorderAndStart(nearestPOI.lat, nearestPOI.lon)
                 }
-                className="bg-stone-800 rounded-2xl p-5 text-left transition-all border border-stone-700 hover:border-orange-500 active:scale-95"
+                className="bg-orange-500 rounded-2xl p-5 text-left transition-all active:scale-95 shadow-lg shadow-orange-900/40"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-orange-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <span className="text-2xl">📍</span>
+                  <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <circle cx="12" cy="12" r="3" fill="currentColor" />
+                      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" strokeLinecap="round" />
+                      <circle cx="12" cy="12" r="8" strokeOpacity="0.4" />
+                    </svg>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-white font-bold">
-                      {language === 'es' ? 'Punto más cercano a mí' : 'Nearest point to me'}
+                    <p className="text-white font-black text-base">
+                      {language === 'es' ? '🚀 Iniciar desde mi ubicación' : '🚀 Start from my location'}
                     </p>
-                    <p className="text-stone-400 text-sm truncate">{nearestPOI.name}</p>
+                    <p className="text-orange-100 text-sm mt-0.5">
+                      {language === 'es'
+                        ? 'Te guío desde aquí hasta la 1ª parada'
+                        : 'I\'ll guide you from here to the 1st stop'}
+                    </p>
                     {distToNearest !== null ? (
-                      <p className="text-orange-400 text-xs mt-0.5">
-                        {formatDist(distToNearest)} {language === 'es' ? 'de distancia' : 'away'}
+                      <p className="text-orange-200 text-xs mt-1">
+                        📍 {nearestPOI.name} · {formatDist(distToNearest)} {language === 'es' ? 'de aquí' : 'from here'}
                       </p>
                     ) : (
-                      <p className="text-stone-500 text-xs mt-0.5 flex items-center gap-1">
-                        <span className="inline-block h-3 w-3 animate-spin rounded-full border border-stone-500 border-t-transparent" />
+                      <p className="text-orange-200 text-xs mt-1 flex items-center gap-1">
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border border-orange-200 border-t-white" />
                         {language === 'es' ? 'Buscando GPS...' : 'Getting GPS...'}
                       </p>
                     )}
                   </div>
-                  <svg className="w-5 h-5 text-stone-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-5 h-5 text-white/70 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
                 </div>
@@ -724,30 +732,30 @@ export function ActiveRoutePage() {
   // PHASE: AT_POI + POST_POI
   // ======================================================
   if (phase === 'at_poi' || phase === 'post_poi') {
-    const imgHeight = currentPOI?.imageUrl ? '40vh' : '22vh'
+    const hasImage = !!currentPOI?.imageUrl
 
     return (
-      <div className="flex flex-col h-screen bg-stone-50 overflow-hidden">
-        {/* Image / map header */}
+      <div className="flex flex-col h-screen bg-stone-50" style={{ WebkitOverflowScrolling: 'touch' }}>
+        {/* Compact image / map header — max 28vh so audio is always visible */}
         <div
           className={`relative flex-shrink-0 transition-transform duration-300 ${justArrived ? 'scale-[1.01]' : 'scale-100'}`}
-          style={{ height: imgHeight }}
+          style={{ height: hasImage ? '28vh' : '18vh', minHeight: hasImage ? 120 : 80 }}
         >
-          {currentPOI?.imageUrl ? (
+          {hasImage ? (
             <img
-              src={currentPOI.imageUrl}
-              alt={currentPOI.name}
+              src={currentPOI!.imageUrl}
+              alt={currentPOI!.name}
               className="w-full h-full object-cover"
             />
           ) : (
             <MapView pois={[currentPOI!]} currentPOIIndex={0} className="w-full h-full" />
           )}
-          <div className={`absolute inset-0 bg-gradient-to-t from-black/70 to-transparent transition-opacity duration-500 ${justArrived ? 'opacity-50' : 'opacity-100'}`} />
+          <div className={`absolute inset-0 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-500 ${justArrived ? 'opacity-50' : 'opacity-100'}`} />
 
           {/* Back to navigation */}
           <button
             onClick={() => { stopTTS(); setPhase('navigating') }}
-            className="absolute top-[max(1rem,env(safe-area-inset-top))] left-4 w-10 h-10 bg-black/30 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
+            className="absolute top-[max(0.75rem,env(safe-area-inset-top))] left-4 w-10 h-10 bg-black/30 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -755,41 +763,44 @@ export function ActiveRoutePage() {
           </button>
 
           {/* Stop number */}
-          <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 bg-orange-500 rounded-xl px-3 py-1.5 shadow">
+          <div className="absolute top-[max(0.75rem,env(safe-area-inset-top))] right-4 bg-orange-500 rounded-xl px-3 py-1.5 shadow">
             <span className="text-white font-black text-sm">{currentPOIIndex + 1}/{pois.length}</span>
           </div>
 
-          {/* POI name */}
-          <div className="absolute bottom-4 left-4 right-4">
-            <div className="inline-block bg-orange-500/80 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1 rounded-full capitalize mb-2">
+          {/* POI name overlay */}
+          <div className="absolute bottom-3 left-4 right-16">
+            <div className="inline-block bg-orange-500/90 backdrop-blur-sm text-white text-xs font-semibold px-2.5 py-1 rounded-full capitalize mb-1">
               {currentPOI?.category}
             </div>
-            <h1 className="text-white font-black text-2xl leading-tight">{currentPOI?.name}</h1>
+            <h1 className="text-white font-black text-xl leading-tight line-clamp-2">{currentPOI?.name}</h1>
           </div>
         </div>
 
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 pb-40">
-          {/* Audio player */}
+        {/* Audio player — always visible, sticky below image */}
+        <div className="flex-shrink-0 px-4 pt-3 pb-2 bg-stone-50 border-b border-stone-100 shadow-sm">
           {audioLoading ? (
-            <div className="bg-stone-100 rounded-2xl p-4 flex items-center gap-3 mb-4">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-orange-200 border-t-orange-500" />
-              <p className="text-stone-400 text-sm">
-                {language === 'es' ? 'Preparando guía de audio...' : 'Preparing audio guide...'}
+            <div className="bg-orange-50 border border-orange-100 rounded-2xl px-4 py-3 flex items-center gap-3">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-orange-200 border-t-orange-500 flex-shrink-0" />
+              <p className="text-orange-600 text-sm font-medium">
+                {language === 'es' ? '🎧 Preparando guía de audio...' : '🎧 Preparing audio guide...'}
               </p>
             </div>
           ) : audioScript ? (
-            <div className="mb-4">
-              <AudioPlayer
-                text={audioScript}
-                poiName={currentPOI?.name || ''}
-                autoPlay={phase === 'at_poi'}
-                onPlayEnd={() => setPhase('post_poi')}
-              />
+            <AudioPlayer
+              text={audioScript}
+              poiName={currentPOI?.name || ''}
+              autoPlay={phase === 'at_poi'}
+              onPlayEnd={() => setPhase('post_poi')}
+            />
+          ) : (
+            <div className="bg-stone-100 rounded-2xl px-4 py-3 text-stone-400 text-sm text-center">
+              {language === 'es' ? 'Audio no disponible' : 'Audio not available'}
             </div>
-          ) : null}
+          )}
+        </div>
 
-          {/* Info chips */}
+        {/* Scrollable content below audio */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 pb-36" style={{ WebkitOverflowScrolling: 'touch' }}>
           {currentPOI && (currentPOI.address || currentPOI.openingHours || currentPOI.estimatedVisitMinutes) && (
             <div className="flex flex-wrap gap-2 mb-4">
               {currentPOI.address && (
