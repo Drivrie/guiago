@@ -18,8 +18,27 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
   const hasAutoPlayed = useRef(false)
 
   useEffect(() => {
-    return () => { stop() }
+    return () => {
+      stop()
+      // Clear MediaSession on unmount
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null
+      }
+    }
   }, [])
+
+  // MediaSession API — lock screen controls on iOS/Android
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: poiName,
+      artist: language === 'es' ? 'GuiAgo · Guía turístico' : 'GuiAgo · Tour guide',
+      album: language === 'es' ? 'Guía de audio' : 'Audio guide',
+    })
+    navigator.mediaSession.setActionHandler('play', () => handlePlay())
+    navigator.mediaSession.setActionHandler('pause', () => handlePause())
+    navigator.mediaSession.setActionHandler('stop', () => handleStop())
+  }, [poiName, language, text])
 
   // Stop when text changes, reset auto-play flag
   useEffect(() => {

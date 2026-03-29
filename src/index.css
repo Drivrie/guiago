@@ -71,10 +71,17 @@ body {
   font-family: inherit;
 }
 
-/* Prevent text selection on interactive elements */
-button, a {
+/* Prevent text selection + remove 300ms tap delay on iOS */
+button, a, [role="button"] {
   user-select: none;
   -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+/* Leaflet iOS touch fix */
+.leaflet-container {
+  touch-action: pan-x pan-y;
+  -webkit-touch-callout: none;
 }
 
 /* Line clamp utilities */

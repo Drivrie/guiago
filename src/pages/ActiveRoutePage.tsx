@@ -562,6 +562,26 @@ export function ActiveRoutePage() {
             </div>
           )}
 
+          {/* Open in native maps */}
+          {currentPOI && (
+            <div className="flex gap-2 mb-3">
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${currentPOI.lat},${currentPOI.lon}&travelmode=walking`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 flex items-center justify-center gap-1.5 bg-stone-800 text-blue-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
+              >
+                🗺️ Google Maps
+              </a>
+              <a
+                href={`maps://maps.apple.com/?daddr=${currentPOI.lat},${currentPOI.lon}&dirflg=w`}
+                className="flex-1 flex items-center justify-center gap-1.5 bg-stone-800 text-stone-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
+              >
+                🍎 Apple Maps
+              </a>
+            </div>
+          )}
+
           {/* Route stops toggle */}
           <button
             onClick={() => setShowManualList(true)}
