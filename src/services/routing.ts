@@ -41,6 +41,35 @@ function formatDistance(meters: number): string {
   return `${(meters / 1000).toFixed(1)} km`
 }
 
+function buildInstructionEn(type: string, modifier?: string, streetName?: string): string {
+  const street = streetName && streetName !== '' ? ` on ${streetName}` : ''
+  switch (type) {
+    case 'depart': return `Start${street}`
+    case 'arrive': return `You have arrived at your destination`
+    case 'turn':
+      if (modifier === 'left' || modifier === 'sharp left') return `Turn left${street}`
+      if (modifier === 'right' || modifier === 'sharp right') return `Turn right${street}`
+      if (modifier === 'slight left') return `Keep slightly left${street}`
+      if (modifier === 'slight right') return `Keep slightly right${street}`
+      if (modifier === 'uturn') return `Make a U-turn${street}`
+      return `Turn${street}`
+    case 'new name': return `Continue${street}`
+    case 'continue': return `Continue straight${street}`
+    case 'merge': return `Merge${street}`
+    case 'fork':
+      if (modifier?.includes('left')) return `At the fork, keep left${street}`
+      if (modifier?.includes('right')) return `At the fork, keep right${street}`
+      return `At the fork${street}`
+    case 'end of road':
+      if (modifier === 'left') return `At the end, turn left${street}`
+      if (modifier === 'right') return `At the end, turn right${street}`
+      return `At the end of the road${street}`
+    case 'roundabout':
+    case 'rotary': return `At the roundabout${street}`
+    default: return `Continue${street}`
+  }
+}
+
 function buildInstructionEs(type: string, modifier?: string, streetName?: string): string {
   const street = streetName && streetName !== '' ? ` por ${streetName}` : ''
 
@@ -79,7 +108,7 @@ function buildInstructionEs(type: string, modifier?: string, streetName?: string
   }
 }
 
-export async function getRoute(waypoints: [number, number][]): Promise<RouteResult | null> {
+export async function getRoute(waypoints: [number, number][], lang: 'es' | 'en' = 'es'): Promise<RouteResult | null> {
   if (waypoints.length < 2) return null
 
   try {
@@ -131,11 +160,9 @@ export async function getRoute(waypoints: [number, number][]): Promise<RouteResu
           value: step.duration,
           text: formatDuration(step.duration)
         },
-        instruction: buildInstructionEs(
-          step.maneuver.type,
-          step.maneuver.modifier,
-          step.name
-        ),
+        instruction: lang === 'en'
+          ? buildInstructionEn(step.maneuver.type, step.maneuver.modifier, step.name)
+          : buildInstructionEs(step.maneuver.type, step.maneuver.modifier, step.name),
         maneuver: step.maneuver ? {
           type: step.maneuver.type,
           modifier: step.maneuver.modifier,
