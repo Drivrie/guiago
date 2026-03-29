@@ -6,23 +6,23 @@
   "background_color": "#FFF8F0",
   "display": "standalone",
   "orientation": "portrait",
-  "scope": "/",
-  "start_url": "/",
+  "scope": "/guiago/",
+  "start_url": "/guiago/",
   "lang": "es",
   "categories": ["travel", "navigation", "education"],
   "icons": [
     {
-      "src": "/pwa-192x192.png",
+      "src": "pwa-192x192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
@@ -31,12 +31,12 @@
   "shortcuts": [
     {
       "name": "Buscar ciudad",
-      "url": "/",
+      "url": "/guiago/",
       "description": "Busca una nueva ciudad para explorar"
     },
     {
       "name": "Rutas guardadas",
-      "url": "/offline",
+      "url": "/guiago/#/offline",
       "description": "Ver rutas descargadas"
     }
   ]

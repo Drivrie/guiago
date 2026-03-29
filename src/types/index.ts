@@ -79,6 +79,7 @@ export interface Route {
   language: Language
   isOffline?: boolean
   offlineDownloadedAt?: string
+  story?: string
 }
 
 export interface AudioGuide {

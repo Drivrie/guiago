@@ -96,6 +96,32 @@ export function POIDetailPage() {
           </div>
         )}
 
+        {/* Navigate to POI */}
+        <div className="flex gap-2 mb-4">
+          <a
+            href={`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}&travelmode=walking`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-2 bg-blue-500 text-white font-semibold text-sm py-3 rounded-2xl active:scale-95 transition-transform shadow-sm"
+          >
+            <span>🗺️</span> Google Maps
+          </a>
+          <a
+            href={`maps://maps.apple.com/?daddr=${poi.lat},${poi.lon}&dirflg=w`}
+            className="flex-1 flex items-center justify-center gap-2 bg-stone-800 text-white font-semibold text-sm py-3 rounded-2xl active:scale-95 transition-transform shadow-sm"
+          >
+            <span>🍎</span> Apple Maps
+          </a>
+          <a
+            href={`https://waze.com/ul?ll=${poi.lat},${poi.lon}&navigate=yes`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 flex items-center justify-center gap-2 bg-cyan-500 text-white font-semibold text-sm py-3 rounded-2xl active:scale-95 transition-transform shadow-sm"
+          >
+            <span>📍</span> Waze
+          </a>
+        </div>
+
         {/* Info chips */}
         <div className="flex flex-wrap gap-2 mb-6">
           {poi.address && (
@@ -151,7 +177,7 @@ export function POIDetailPage() {
           <Button
             fullWidth
             onClick={() => {
-              if (poiIndex >= 0) setCurrentPOIIndex(poiIndex)
+              if (poiIndex >= 0 && poiIndex < pois.length) setCurrentPOIIndex(poiIndex)
               navigate('/route/active')
             }}
           >

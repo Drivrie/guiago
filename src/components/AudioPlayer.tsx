@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { speak, stop, pause, resume, isSpeaking, isPaused, setRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
 import { useAppStore } from '../stores/appStore'
 
@@ -16,10 +16,34 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
   const [paused, setPaused] = useState(false)
   const [supported] = useState(() => 'speechSynthesis' in window)
   const hasAutoPlayed = useRef(false)
+  // Stable waveform bar heights — only regenerated when text changes to prevent flicker
+  const waveHeights = useMemo(
+    () => Array.from({ length: 20 }, () => Math.random() * 70 + 30),
+    [text]
+  )
 
   useEffect(() => {
-    return () => { stop() }
+    return () => {
+      stop()
+      // Clear MediaSession on unmount
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null
+      }
+    }
   }, [])
+
+  // MediaSession API — lock screen controls on iOS/Android
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: poiName,
+      artist: language === 'es' ? 'GuiAgo · Guía turístico' : 'GuiAgo · Tour guide',
+      album: language === 'es' ? 'Guía de audio' : 'Audio guide',
+    })
+    navigator.mediaSession.setActionHandler('play', () => handlePlay())
+    navigator.mediaSession.setActionHandler('pause', () => handlePause())
+    navigator.mediaSession.setActionHandler('stop', () => handleStop())
+  }, [poiName, language, text])
 
   // Stop when text changes, reset auto-play flag
   useEffect(() => {
@@ -115,14 +139,14 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
       {/* Waveform animation when playing */}
       {playing && (
         <div className="flex items-center gap-0.5 mb-3 h-6">
-          {[...Array(20)].map((_, i) => (
+          {waveHeights.map((h, i) => (
             <div
               key={i}
               className="flex-1 bg-orange-400 rounded-full animate-pulse"
               style={{
-                height: `${Math.random() * 70 + 30}%`,
+                height: `${h}%`,
                 animationDelay: `${i * 0.05}s`,
-                animationDuration: `${0.5 + Math.random() * 0.5}s`
+                animationDuration: `${0.6 + (i % 3) * 0.15}s`,
               }}
             />
           ))}

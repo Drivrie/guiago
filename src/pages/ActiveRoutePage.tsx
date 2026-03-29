@@ -43,6 +43,7 @@ export function ActiveRoutePage() {
   const [voiceMuted, setVoiceMuted] = useState(false)
   const [preRouteSegment, setPreRouteSegment] = useState<RouteSegment | null>(null)
   const [inPreRoute, setInPreRoute] = useState(false)
+  const [justArrived, setJustArrived] = useState(false)
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
 
@@ -96,7 +97,7 @@ export function ActiveRoutePage() {
     }
   }, [phase])
 
-  // ---- GPS arrival detection (30m radius) ----
+  // ---- GPS arrival detection (30m auto-arrive) ----
   useEffect(() => {
     if (phase !== 'navigating' || !userLocation || !currentPOI) return
     const dist = calculateDistance(userLocation[0], userLocation[1], currentPOI.lat, currentPOI.lon)
@@ -104,7 +105,7 @@ export function ActiveRoutePage() {
     if (dist < 30) {
       setInPreRoute(false)
       setPreRouteSegment(null)
-      setPhase('at_poi')
+      triggerArrival()
     }
   }, [userLocation, phase, currentPOIIndex])
 
@@ -179,6 +180,14 @@ export function ActiveRoutePage() {
     setDistanceToPOI(null)
   }, [currentPOIIndex])
 
+  // ---- Haptic + visual animation on POI arrival ----
+  function triggerArrival() {
+    navigator.vibrate?.([100, 50, 100])
+    setJustArrived(true)
+    setTimeout(() => setJustArrived(false), 800)
+    setPhase('at_poi')
+  }
+
   // ---- Reorder POIs + rebuild segments from a start coordinate ----
   async function reorderAndStart(startLat: number, startLon: number) {
     if (!currentRoute) return
@@ -191,7 +200,7 @@ export function ActiveRoutePage() {
     const distToFirst = calculateDistance(startLat, startLon, firstPOI.lat, firstPOI.lon)
     if (distToFirst > 50) {
       try {
-        const result = await getRoute([[startLat, startLon], [firstPOI.lat, firstPOI.lon]])
+        const result = await getRoute([[startLat, startLon], [firstPOI.lat, firstPOI.lon]], language)
         const routeData = result ?? getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
         preRoute = {
           from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
@@ -220,7 +229,7 @@ export function ActiveRoutePage() {
         const result = await getRoute([
           [orderedPOIs[i].lat, orderedPOIs[i].lon],
           [orderedPOIs[i + 1].lat, orderedPOIs[i + 1].lon]
-        ])
+        ], language)
         if (result) {
           segments.push({
             from: orderedPOIs[i], to: orderedPOIs[i + 1],
@@ -318,6 +327,17 @@ export function ActiveRoutePage() {
 
         {/* Content */}
         <div className="flex-1 px-4 pb-8 flex flex-col justify-center gap-4 max-w-lg mx-auto w-full">
+
+          {/* AI route story intro card */}
+          {currentRoute?.story && (
+            <div className="bg-gradient-to-br from-orange-500/20 to-amber-500/10 border border-orange-500/30 rounded-2xl p-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl flex-shrink-0">✨</span>
+                <p className="text-white/90 text-sm leading-relaxed italic">{currentRoute.story}</p>
+              </div>
+            </div>
+          )}
+
           <div className="text-center mb-2">
             <p className="text-white text-2xl font-black mb-1">
               {language === 'es' ? '¿Desde dónde empezamos?' : 'Where do we start?'}
@@ -510,6 +530,8 @@ export function ActiveRoutePage() {
                 remainingDistance={activeSegment?.distance}
                 remainingTime={activeSegment?.duration}
                 targetPOIName={currentPOI?.name}
+                stepIndex={currentStepIndex}
+                totalSteps={navSteps.length}
               />
             </div>
             {/* Voice mute toggle */}
@@ -535,6 +557,7 @@ export function ActiveRoutePage() {
             userLocation={userLocation}
             onPOIClick={setCurrentPOIIndex}
             followUser
+            preRouteGeometry={inPreRoute && preRouteSegment ? preRouteSegment.geometry : undefined}
             className="w-full h-full"
           />
 
@@ -562,6 +585,34 @@ export function ActiveRoutePage() {
             </div>
           )}
 
+          {/* Open in native maps */}
+          {currentPOI && (
+            <div className="flex gap-2 mb-3">
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${currentPOI.lat},${currentPOI.lon}&travelmode=walking`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 flex items-center justify-center gap-1 bg-stone-800 text-blue-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
+              >
+                🗺️ Google
+              </a>
+              <a
+                href={`maps://maps.apple.com/?daddr=${currentPOI.lat},${currentPOI.lon}&dirflg=w`}
+                className="flex-1 flex items-center justify-center gap-1 bg-stone-800 text-stone-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
+              >
+                🍎 Apple
+              </a>
+              <a
+                href={`https://www.waze.com/ul?ll=${currentPOI.lat},${currentPOI.lon}&navigate=yes`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 flex items-center justify-center gap-1 bg-stone-800 text-cyan-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
+              >
+                🔵 Waze
+              </a>
+            </div>
+          )}
+
           {/* Route stops toggle */}
           <button
             onClick={() => setShowManualList(true)}
@@ -575,16 +626,16 @@ export function ActiveRoutePage() {
             </svg>
           </button>
 
-          {distanceToPOI !== null && distanceToPOI < 100 ? (
+          {distanceToPOI !== null && distanceToPOI < 120 ? (
             <button
-              onClick={() => setPhase('at_poi')}
-              className="w-full py-4 bg-green-600 text-white font-bold rounded-2xl text-lg active:scale-95 transition-transform"
+              onClick={triggerArrival}
+              className="w-full py-4 bg-green-600 text-white font-bold rounded-2xl text-lg active:scale-95 transition-transform shadow-lg shadow-green-900/40"
             >
               ✅ {language === 'es' ? '¡He llegado!' : "I've arrived!"}
             </button>
           ) : (
             <button
-              onClick={() => setPhase('at_poi')}
+              onClick={triggerArrival}
               className="w-full py-3 bg-stone-700 text-stone-300 font-medium rounded-2xl text-sm active:scale-95 transition-transform"
             >
               📍 {language === 'es' ? 'Confirmar llegada manualmente' : 'Confirm arrival manually'}
@@ -599,50 +650,61 @@ export function ActiveRoutePage() {
           title={language === 'es' ? 'Paradas de la ruta' : 'Route stops'}
           snapPoints="full"
         >
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
             {pois.map((poi, idx) => {
               const dist = userLocation
                 ? Math.round(calculateDistance(userLocation[0], userLocation[1], poi.lat, poi.lon))
                 : null
               const isCurrentStop = idx === currentPOIIndex
               const isPastStop = idx < currentPOIIndex
+              const segToNext = currentRoute?.segments?.[idx]
               return (
-                <button
-                  key={poi.id}
-                  onClick={() => { setShowManualList(false); setCurrentPOIIndex(idx); setPhase('navigating') }}
-                  className={`flex items-center gap-3 p-4 rounded-2xl text-left transition-all ${
-                    isCurrentStop
-                      ? 'bg-orange-50 border-2 border-orange-400'
-                      : isPastStop
-                      ? 'bg-stone-50 opacity-60'
-                      : 'bg-stone-50'
-                  }`}
-                >
-                  {poi.imageUrl ? (
-                    <img src={poi.imageUrl} alt={poi.name} className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
-                  ) : (
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                      isCurrentStop ? 'bg-orange-500' : isPastStop ? 'bg-stone-300' : 'bg-stone-200'
-                    }`}>
-                      {isPastStop
-                        ? <span className="text-white text-lg">✓</span>
-                        : <span className={`text-lg font-black ${isCurrentStop ? 'text-white' : 'text-stone-500'}`}>{idx + 1}</span>
-                      }
+                <div key={poi.id}>
+                  <button
+                    onClick={() => { setShowManualList(false); setCurrentPOIIndex(idx); setPhase('navigating') }}
+                    className={`w-full flex items-center gap-3 p-4 rounded-2xl text-left transition-all ${
+                      isCurrentStop
+                        ? 'bg-orange-50 border-2 border-orange-400'
+                        : isPastStop
+                        ? 'bg-stone-50 opacity-60'
+                        : 'bg-stone-50'
+                    }`}
+                  >
+                    {poi.imageUrl ? (
+                      <img src={poi.imageUrl} alt={poi.name} className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
+                    ) : (
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                        isCurrentStop ? 'bg-orange-500' : isPastStop ? 'bg-stone-300' : 'bg-stone-200'
+                      }`}>
+                        {isPastStop
+                          ? <span className="text-white text-lg">✓</span>
+                          : <span className={`text-lg font-black ${isCurrentStop ? 'text-white' : 'text-stone-500'}`}>{idx + 1}</span>
+                        }
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-bold truncate ${isCurrentStop ? 'text-orange-700' : 'text-stone-800'}`}>{poi.name}</p>
+                      <p className="text-stone-400 text-xs capitalize">{poi.category}</p>
+                      {isCurrentStop && (
+                        <p className="text-orange-500 text-xs font-medium mt-0.5">
+                          {language === 'es' ? '← Parada actual' : '← Current stop'}
+                        </p>
+                      )}
+                    </div>
+                    {dist !== null && (
+                      <p className="text-stone-400 text-xs flex-shrink-0">{formatDist(dist)}</p>
+                    )}
+                  </button>
+                  {/* Walking distance connector to next POI */}
+                  {idx < pois.length - 1 && segToNext && (
+                    <div className="flex items-center gap-2 px-6 py-1">
+                      <div className="w-px h-4 bg-stone-300 ml-5" />
+                      <span className="text-stone-400 text-xs">
+                        🚶 {formatDist(Math.round(segToNext.distance))} · ~{Math.round(segToNext.duration / 60)} min
+                      </span>
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <p className={`font-bold truncate ${isCurrentStop ? 'text-orange-700' : 'text-stone-800'}`}>{poi.name}</p>
-                    <p className="text-stone-400 text-xs capitalize">{poi.category}</p>
-                    {isCurrentStop && (
-                      <p className="text-orange-500 text-xs font-medium mt-0.5">
-                        {language === 'es' ? '← Parada actual' : '← Current stop'}
-                      </p>
-                    )}
-                  </div>
-                  {dist !== null && (
-                    <p className="text-stone-400 text-xs flex-shrink-0">{formatDist(dist)}</p>
-                  )}
-                </button>
+                </div>
               )
             })}
           </div>
@@ -667,7 +729,10 @@ export function ActiveRoutePage() {
     return (
       <div className="flex flex-col h-screen bg-stone-50 overflow-hidden">
         {/* Image / map header */}
-        <div className="relative flex-shrink-0" style={{ height: imgHeight }}>
+        <div
+          className={`relative flex-shrink-0 transition-transform duration-300 ${justArrived ? 'scale-[1.01]' : 'scale-100'}`}
+          style={{ height: imgHeight }}
+        >
           {currentPOI?.imageUrl ? (
             <img
               src={currentPOI.imageUrl}
@@ -677,7 +742,7 @@ export function ActiveRoutePage() {
           ) : (
             <MapView pois={[currentPOI!]} currentPOIIndex={0} className="w-full h-full" />
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+          <div className={`absolute inset-0 bg-gradient-to-t from-black/70 to-transparent transition-opacity duration-500 ${justArrived ? 'opacity-50' : 'opacity-100'}`} />
 
           {/* Back to navigation */}
           <button
@@ -745,6 +810,34 @@ export function ActiveRoutePage() {
             </div>
           )}
 
+          {/* Navigate to this POI from here */}
+          {currentPOI && (
+            <div className="flex gap-2 mb-3">
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${currentPOI.lat},${currentPOI.lon}&travelmode=walking`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 flex items-center justify-center gap-1.5 bg-stone-100 text-blue-600 text-xs font-semibold py-2.5 rounded-xl active:scale-95 transition-transform"
+              >
+                🗺️ Google Maps
+              </a>
+              <a
+                href={`https://www.waze.com/ul?ll=${currentPOI.lat},${currentPOI.lon}&navigate=yes`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 flex items-center justify-center gap-1.5 bg-stone-100 text-cyan-600 text-xs font-semibold py-2.5 rounded-xl active:scale-95 transition-transform"
+              >
+                🔵 Waze
+              </a>
+              <a
+                href={`maps://maps.apple.com/?daddr=${currentPOI.lat},${currentPOI.lon}&dirflg=w`}
+                className="flex-1 flex items-center justify-center gap-1.5 bg-stone-100 text-stone-600 text-xs font-semibold py-2.5 rounded-xl active:scale-95 transition-transform"
+              >
+                🍎 Apple
+              </a>
+            </div>
+          )}
+
           {/* Detail link */}
           {currentPOI && (
             <button
@@ -797,26 +890,67 @@ export function ActiveRoutePage() {
   // ======================================================
   // PHASE: COMPLETE
   // ======================================================
+  const totalMinutes = Math.round(currentRoute.totalDuration / 60)
+  const canShare = typeof navigator.share === 'function'
+
+  async function handleShare() {
+    if (!currentRoute) return
+    try {
+      await navigator.share({
+        title: language === 'es'
+          ? `Mi ruta por ${currentRoute.city.name} con GuiAgo`
+          : `My ${currentRoute.city.name} tour with GuiAgo`,
+        text: language === 'es'
+          ? `Acabo de completar una ruta por ${currentRoute.city.name}: ${pois.length} paradas y ${formatDist(Math.round(currentRoute.totalDistance))} a pie. ¡Increíble experiencia!`
+          : `Just completed a tour of ${currentRoute.city.name}: ${pois.length} stops and ${formatDist(Math.round(currentRoute.totalDistance))} on foot. Amazing experience!`,
+        url: window.location.href,
+      })
+    } catch { /* user cancelled */ }
+  }
+
   return (
-    <div className="min-h-screen bg-stone-50 flex flex-col items-center justify-center p-8 safe-top">
+    <div className="min-h-screen bg-gradient-to-b from-stone-900 via-stone-800 to-stone-900 flex flex-col items-center justify-center p-8 safe-top">
       <div className="text-center w-full max-w-sm mx-auto">
         <div className="text-7xl mb-4">🎉</div>
-        <h1 className="text-3xl font-black text-stone-900 mb-2">
-          {language === 'es' ? '¡Ruta completada!' : 'Route completed!'}
+        <h1 className="text-3xl font-black text-white mb-2">
+          {language === 'es' ? '¡Ruta completada!' : 'Tour completed!'}
         </h1>
-        <p className="text-stone-500 mb-1">
+        <p className="text-stone-300 mb-6">
           {language === 'es'
-            ? `Has visitado ${pois.length} lugares en ${currentRoute.city.name}`
-            : `You visited ${pois.length} places in ${currentRoute.city.name}`}
+            ? `Has explorado ${currentRoute.city.name} como un local`
+            : `You explored ${currentRoute.city.name} like a local`}
         </p>
-        {currentRoute.totalDistance > 0 && (
-          <p className="text-stone-400 text-sm mb-8">
-            {formatDist(Math.round(currentRoute.totalDistance))} {language === 'es' ? 'caminados' : 'walked'}
-          </p>
-        )}
+
+        {/* Stats grid */}
+        <div className="grid grid-cols-3 gap-3 mb-8">
+          <div className="bg-white/10 rounded-2xl p-3">
+            <p className="text-white font-black text-2xl">{pois.length}</p>
+            <p className="text-stone-400 text-xs mt-0.5">{language === 'es' ? 'Paradas' : 'Stops'}</p>
+          </div>
+          <div className="bg-white/10 rounded-2xl p-3">
+            <p className="text-white font-black text-2xl">{formatDist(Math.round(currentRoute.totalDistance))}</p>
+            <p className="text-stone-400 text-xs mt-0.5">{language === 'es' ? 'Caminado' : 'Walked'}</p>
+          </div>
+          <div className="bg-white/10 rounded-2xl p-3">
+            <p className="text-white font-black text-2xl">
+              {totalMinutes < 60 ? `${totalMinutes}m` : `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60 ? (totalMinutes % 60) + 'm' : ''}`}
+            </p>
+            <p className="text-stone-400 text-xs mt-0.5">{language === 'es' ? 'Duración' : 'Duration'}</p>
+          </div>
+        </div>
+
         <div className="flex flex-col gap-3">
+          {canShare && (
+            <button
+              onClick={handleShare}
+              className="w-full py-4 bg-orange-500 text-white font-bold rounded-2xl text-base active:scale-95 transition-transform shadow-lg shadow-orange-900/40"
+            >
+              📤 {language === 'es' ? 'Compartir mi ruta' : 'Share my tour'}
+            </button>
+          )}
           <Button
             fullWidth
+            variant={canShare ? 'secondary' : 'primary'}
             onClick={() => {
               setPhase('selecting_start')
               setCurrentPOIIndex(0)
@@ -824,7 +958,7 @@ export function ActiveRoutePage() {
           >
             {language === 'es' ? '🔄 Repetir ruta' : '🔄 Repeat route'}
           </Button>
-          <Button fullWidth variant="secondary" onClick={() => navigate('/')}>
+          <Button fullWidth variant="ghost" onClick={() => navigate('/')}>
             {language === 'es' ? '🏠 Volver al inicio' : '🏠 Go home'}
           </Button>
         </div>

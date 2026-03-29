@@ -207,7 +207,7 @@ export function RouteSetupPage() {
       for (let i = 0; i < pois.length - 1; i++) {
         const from = pois[i], to = pois[i + 1]
         try {
-          const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]])
+          const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]], language)
           if (result) {
             // Parse steps for navigation
             const steps = getStepByStepInstructions(result)
@@ -239,6 +239,7 @@ export function RouteSetupPage() {
         createdAt: new Date().toISOString(),
         language,
         isOffline: false,
+        story: aiRouteStory || undefined,
       }
 
       setRoute(route)

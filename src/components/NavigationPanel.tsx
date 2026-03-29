@@ -7,6 +7,8 @@ interface NavigationPanelProps {
   remainingDistance?: number
   remainingTime?: number
   targetPOIName?: string
+  stepIndex?: number
+  totalSteps?: number
 }
 
 function formatMeters(m: number): string {
@@ -67,7 +69,9 @@ export function NavigationPanel({
   nextStep,
   remainingDistance,
   remainingTime,
-  targetPOIName
+  targetPOIName,
+  stepIndex,
+  totalSteps,
 }: NavigationPanelProps) {
   const { language } = useAppStore()
 
@@ -123,6 +127,23 @@ export function NavigationPanel({
           </div>
         )}
       </div>
+
+      {/* Step counter badge */}
+      {stepIndex !== undefined && totalSteps !== undefined && totalSteps > 1 && (
+        <div className="px-4 pb-1">
+          <div className="flex items-center gap-1.5">
+            <div className="flex-1 h-1 bg-white/20 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-white/70 rounded-full transition-all duration-300"
+                style={{ width: `${((stepIndex + 1) / totalSteps) * 100}%` }}
+              />
+            </div>
+            <span className="text-white/60 text-xs flex-shrink-0">
+              {stepIndex + 1}/{totalSteps}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Next step preview bar */}
       {nextStep && !isArriving && (

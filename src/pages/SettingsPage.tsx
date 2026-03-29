@@ -7,7 +7,7 @@ import { validateApiKey, hasBuiltInKey, activeEngine } from '../services/ai'
 export function SettingsPage() {
   const navigate = useNavigate()
   const {
-    language, anthropicApiKey, setAnthropicApiKey,
+    language, setLanguage, anthropicApiKey, setAnthropicApiKey,
     visitedPOIs, clearVisitHistory
   } = useAppStore()
 
@@ -60,6 +60,38 @@ export function SettingsPage() {
       </div>
 
       <div className="px-4 py-6 flex flex-col gap-6 pb-20">
+
+        {/* ---- Language Section ---- */}
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xl">🌍</span>
+            <h2 className="font-black text-stone-900 text-lg">
+              {es ? 'Idioma' : 'Language'}
+            </h2>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setLanguage('es')}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold text-sm transition-all active:scale-95 ${
+                language === 'es'
+                  ? 'bg-orange-500 text-white shadow-md shadow-orange-200'
+                  : 'bg-white text-stone-600 border border-stone-200'
+              }`}
+            >
+              🇪🇸 Español
+            </button>
+            <button
+              onClick={() => setLanguage('en')}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold text-sm transition-all active:scale-95 ${
+                language === 'en'
+                  ? 'bg-orange-500 text-white shadow-md shadow-orange-200'
+                  : 'bg-white text-stone-600 border border-stone-200'
+              }`}
+            >
+              🇬🇧 English
+            </button>
+          </div>
+        </section>
 
         {/* ---- AI Section ---- */}
         <section>
