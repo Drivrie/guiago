@@ -59,6 +59,7 @@ export function TodayPage() {
   const [phase, setPhase] = useState<'locating' | 'selecting' | 'error'>('locating')
   const [location, setLocation] = useState<DetectedLocation | null>(null)
   const [geoError, setGeoError] = useState<string | null>(null)
+  const [avoidVisited, setAvoidVisited] = useState(true)
 
   const es = language === 'es'
 
@@ -104,7 +105,7 @@ export function TodayPage() {
     setCity(location.city)
     setRouteType(selectedRouteType)
     setDuration(selectedDuration)
-    navigate(`/city/${encodeURIComponent(location.city.name)}`)
+    navigate(`/city/${encodeURIComponent(location.city.name)}`, { state: { avoidVisited } })
   }
 
   const visitedCount = location ? getVisitedPOINames(location.city.id).length : 0
@@ -182,14 +183,22 @@ export function TodayPage() {
               </button>
             </div>
 
-            {/* Visit history notice */}
+            {/* Visit history toggle */}
             {visitedCount > 0 && (
               <div className="mt-3 pt-3 border-t border-white/20">
-                <p className="text-amber-300 text-sm">
-                  ✅ {es
-                    ? `Ya has visitado ${visitedCount} lugares aquí. Te propondremos rutas con sitios nuevos.`
-                    : `You've already visited ${visitedCount} places here. We'll suggest routes with new places.`}
-                </p>
+                <button
+                  onClick={() => setAvoidVisited(v => !v)}
+                  className="w-full flex items-center gap-3 text-left"
+                >
+                  <div className={`w-10 h-5 rounded-full flex items-center transition-colors px-0.5 flex-shrink-0 ${avoidVisited ? 'bg-orange-500' : 'bg-white/20'}`}>
+                    <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${avoidVisited ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </div>
+                  <p className="text-white/80 text-sm">
+                    {avoidVisited
+                      ? (es ? `Evitar los ${visitedCount} lugares ya visitados` : `Avoid ${visitedCount} already visited places`)
+                      : (es ? `Incluir también lugares ya visitados` : `Also include already visited places`)}
+                  </p>
+                </button>
               </div>
             )}
           </div>
