@@ -15,7 +15,7 @@ import { speak, stop as stopTTS } from '../services/tts'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
-type GuidePhase = 'selecting_start' | 'navigating' | 'at_poi' | 'post_poi' | 'complete'
+type GuidePhase = 'selecting_start' | 'ready_to_start' | 'navigating' | 'at_poi' | 'post_poi' | 'complete'
 
 function fallbackSegment(from: POI, to: POI): RouteSegment {
   const direct = getDirectRoute(from, to)
@@ -44,6 +44,8 @@ export function ActiveRoutePage() {
   const [preRouteSegment, setPreRouteSegment] = useState<RouteSegment | null>(null)
   const [inPreRoute, setInPreRoute] = useState(false)
   const [justArrived, setJustArrived] = useState(false)
+  const [showNavigateTo, setShowNavigateTo] = useState(false)
+  const [navigateToInput, setNavigateToInput] = useState('')
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
 
@@ -85,7 +87,7 @@ export function ActiveRoutePage() {
         }).wakeLock.request('screen')
       } catch { /* not supported or denied */ }
     }
-    if (phase === 'navigating' || phase === 'at_poi' || phase === 'post_poi') {
+    if (phase === 'ready_to_start' || phase === 'navigating' || phase === 'at_poi' || phase === 'post_poi') {
       requestWL()
     } else {
       wakeLockRef.current?.release().catch(() => {})
@@ -180,6 +182,50 @@ export function ActiveRoutePage() {
     setDistanceToPOI(null)
   }, [currentPOIIndex])
 
+  // ---- Announce route ready when entering ready_to_start ----
+  useEffect(() => {
+    if (phase !== 'ready_to_start' || voiceMuted) return
+    const firstPOI = pois[0]
+    if (!firstPOI || !currentRoute) return
+    const text = language === 'es'
+      ? `Ruta preparada. ${pois.length} paradas en ${currentRoute.city.name}. Cuando quieras, pulsa el botón para iniciar el guiado hacia ${firstPOI.name}.`
+      : `Route ready. ${pois.length} stops in ${currentRoute.city.name}. When you're ready, press the button to start navigation to ${firstPOI.name}.`
+    const timer = setTimeout(() => speak(text, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.0 }), 600)
+    return () => clearTimeout(timer)
+  }, [phase])
+
+  // ---- Announce route completion when entering complete phase ----
+  useEffect(() => {
+    if (phase !== 'complete' || voiceMuted) return
+    if (!currentRoute) return
+    const text = language === 'es'
+      ? `¡Enhorabuena! Has completado la ruta. Visitaste ${pois.length} lugares en ${currentRoute.city.name}. ¿Qué quieres hacer ahora?`
+      : `Congratulations! You've completed the tour. You visited ${pois.length} places in ${currentRoute.city.name}. What would you like to do next?`
+    const timer = setTimeout(() => speak(text, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.0 }), 600)
+    return () => { clearTimeout(timer); stopTTS() }
+  }, [phase])
+
+  // ---- Start navigation (from ready_to_start → navigating) ----
+  function startNavigation() {
+    stopTTS()
+    const firstPOI = pois[0]
+    if (!voiceMuted && firstPOI) {
+      const firstStep = preRouteSegment?.steps?.[0]
+      const prefix = language === 'es'
+        ? `¡Empezamos! Dirigiéndote hacia ${firstPOI.name}. `
+        : `Starting! Heading to ${firstPOI.name}. `
+      const instruction = firstStep ? buildVoiceInstruction(firstStep, language) : ''
+      speak(prefix + instruction, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
+      lastSpokenStepRef.current = 0 // skip step 0 auto-voice (already announced)
+    }
+    if (!preRouteSegment) {
+      // User already at first POI — skip to at_poi
+      triggerArrival()
+    } else {
+      setPhase('navigating')
+    }
+  }
+
   // ---- Haptic + visual animation on POI arrival ----
   function triggerArrival() {
     navigator.vibrate?.([100, 50, 100])
@@ -252,24 +298,34 @@ export function ActiveRoutePage() {
     setPreRouteSegment(preRoute)
     setInPreRoute(preRoute !== null)
     setRebuilding(false)
-    // If user is essentially at first POI, skip directly to at_poi
-    if (!preRoute) {
-      setPhase('at_poi')
-    } else {
-      setPhase('navigating')
-    }
+    // Always go to ready_to_start so user consciously starts the guided navigation
+    setPhase('ready_to_start')
   }
 
   function advanceToNext() {
     stopTTS()
-    setCurrentStepIndex(0)
-    lastSpokenStepRef.current = -1
     if (isLast) {
       setPhase('complete')
-    } else {
-      setCurrentPOIIndex(currentPOIIndex + 1)
-      setPhase('navigating')
+      return
     }
+    const nextIdx = currentPOIIndex + 1
+    const nextPOI = pois[nextIdx]
+    // Speak "heading to X + first instruction" and skip step 0 in the auto-voice effect
+    if (!voiceMuted && nextPOI) {
+      const nextSeg = currentRoute?.segments?.[nextIdx - 1]
+      const firstStep = nextSeg?.steps?.[0]
+      const prefix = language === 'es'
+        ? `¡Vamos! Ahora hacia ${nextPOI.name}. `
+        : `Let's go! Now heading to ${nextPOI.name}. `
+      const instruction = firstStep ? buildVoiceInstruction(firstStep, language) : ''
+      speak(prefix + instruction, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
+      lastSpokenStepRef.current = 0 // skip step 0 in auto-voice effect (already spoken)
+    } else {
+      lastSpokenStepRef.current = -1
+    }
+    setCurrentStepIndex(0)
+    setCurrentPOIIndex(nextIdx)
+    setPhase('navigating')
   }
 
   function formatDist(meters: number) {
@@ -284,6 +340,143 @@ export function ActiveRoutePage() {
           <p className="text-stone-500 mb-4">{language === 'es' ? 'No hay ruta activa' : 'No active route'}</p>
           <Button onClick={() => navigate('/')}>{language === 'es' ? 'Volver al inicio' : 'Go home'}</Button>
         </div>
+      </div>
+    )
+  }
+
+  // ======================================================
+  // PHASE: READY TO START (route built, waiting for user to press GO)
+  // ======================================================
+  if (phase === 'ready_to_start') {
+    const firstPOI = pois[0]
+    const distToFirst = userLocation && firstPOI
+      ? Math.round(calculateDistance(userLocation[0], userLocation[1], firstPOI.lat, firstPOI.lon))
+      : null
+    const walkMins = distToFirst ? Math.round(distToFirst / 84) : null
+    const totalWalkMins = currentRoute && currentRoute.totalDuration > 0
+      ? Math.round(currentRoute.totalDuration / 60)
+      : null
+
+    return (
+      <div className="flex flex-col h-screen bg-stone-900 safe-top">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3 z-10">
+          <button
+            onClick={() => { stopTTS(); setPhase('selecting_start') }}
+            className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-bold truncate">
+              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute?.city.name}
+            </p>
+            <p className="text-stone-400 text-xs">
+              {pois.length} {language === 'es' ? 'paradas' : 'stops'}
+              {totalWalkMins ? ` · ~${totalWalkMins} min` : ''}
+            </p>
+          </div>
+          <button
+            onClick={() => setShowDownload(true)}
+            className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
+            title={language === 'es' ? 'Descargar para uso offline' : 'Download for offline use'}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Map overview showing full route */}
+        <div className="flex-1 relative">
+          <MapView
+            pois={pois}
+            route={currentRoute}
+            userLocation={userLocation}
+            currentPOIIndex={0}
+            preRouteGeometry={preRouteSegment?.geometry}
+            className="w-full h-full"
+          />
+          {/* Progress dots */}
+          <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5">
+            {pois.slice(0, Math.min(pois.length, 10)).map((_, i) => (
+              <div key={i} className="w-1.5 h-1.5 rounded-full bg-white/60" />
+            ))}
+          </div>
+        </div>
+
+        {/* Bottom panel */}
+        <div className="bg-stone-900 px-4 pt-3 pb-4 safe-bottom">
+          {/* Route story */}
+          {currentRoute?.story && (
+            <div className="bg-stone-800 rounded-2xl px-4 py-3 mb-3 flex items-start gap-2">
+              <span className="text-orange-400 flex-shrink-0 mt-0.5">✨</span>
+              <p className="text-stone-300 text-xs leading-relaxed italic line-clamp-3">{currentRoute.story}</p>
+            </div>
+          )}
+
+          {/* First POI info */}
+          <div className="bg-stone-800 rounded-2xl px-4 py-3 mb-3 flex items-center gap-3">
+            <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center text-white font-black flex-shrink-0">1</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white font-bold text-sm truncate">
+                {language === 'es' ? '1ª parada: ' : '1st stop: '}{firstPOI?.name}
+              </p>
+              <p className="text-stone-400 text-xs">
+                {distToFirst !== null
+                  ? `📍 ${formatDist(distToFirst)}${walkMins ? ` · ~${walkMins} min ${language === 'es' ? 'caminando' : 'walking'}` : ''}`
+                  : (language === 'es' ? 'Calculando distancia...' : 'Calculating distance...')}
+              </p>
+            </div>
+          </div>
+
+          {/* Offline audio warning */}
+          {currentRoute?.isOffline && (
+            <div className="bg-amber-900/40 border border-amber-700/50 rounded-xl px-3 py-2.5 mb-3 flex items-center gap-2">
+              <span className="text-amber-400 flex-shrink-0">📥</span>
+              <p className="text-amber-200 text-xs flex-1">
+                {language === 'es'
+                  ? 'Ruta offline. Si aún no has descargado el audio, hazlo antes de empezar.'
+                  : 'Offline route. Download audio before starting if not done yet.'}
+              </p>
+              <button
+                onClick={() => setShowDownload(true)}
+                className="text-amber-300 text-xs font-bold flex-shrink-0 px-2 py-1 bg-amber-900/60 rounded-lg"
+              >
+                {language === 'es' ? 'Descargar' : 'Download'}
+              </button>
+            </div>
+          )}
+
+          {/* Screen-off notice */}
+          <p className="text-stone-500 text-xs text-center mb-3">
+            🔒 {language === 'es'
+              ? 'El guiado funciona con la pantalla apagada'
+              : 'Navigation works with screen off'}
+          </p>
+
+          {/* BIG START BUTTON */}
+          <button
+            onClick={startNavigation}
+            className="w-full py-5 bg-green-500 text-white font-black text-xl rounded-2xl shadow-xl shadow-green-900/50 active:scale-95 transition-transform flex items-center justify-center gap-3"
+          >
+            <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="12" r="3" fill="white" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3" strokeLinecap="round" />
+              <circle cx="12" cy="12" r="8" strokeOpacity="0.4" />
+            </svg>
+            {language === 'es' ? '🚀 Iniciar guiado' : '🚀 Start navigation'}
+          </button>
+        </div>
+
+        {/* Offline download sheet */}
+        {showDownload && (
+          <BottomSheet isOpen onClose={() => setShowDownload(false)} title={language === 'es' ? 'Uso sin conexión' : 'Offline use'}>
+            <OfflineDownload route={currentRoute!} onComplete={() => setShowDownload(false)} />
+          </BottomSheet>
+        )}
       </div>
     )
   }
@@ -578,75 +771,59 @@ export function ActiveRoutePage() {
           </div>
         </div>
 
-        {/* Bottom: arrival actions */}
-        <div className="bg-stone-900 px-4 pt-3 pb-4 safe-bottom">
-          {/* Distance bar */}
-          {distanceToPOI !== null && (
-            <div className="flex items-center gap-2 mb-3">
-              <div className="flex-1 h-2 bg-stone-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-orange-500 rounded-full transition-all"
-                  style={{ width: `${Math.max(4, 100 - (distanceToPOI / 500) * 100)}%` }}
-                />
-              </div>
-              <span className="text-stone-300 text-xs w-12 text-right">{formatDist(distanceToPOI)}</span>
-            </div>
-          )}
+        {/* Compact bottom bar — keeps map visible on small phones */}
+        <div className="bg-stone-900 px-3 pt-2 pb-3 safe-bottom">
+          {/* Distance progress + controls row */}
+          <div className="flex items-center gap-2 mb-2">
+            {distanceToPOI !== null ? (
+              <>
+                <div className="flex-1 h-2 bg-stone-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-orange-500 rounded-full transition-all"
+                    style={{ width: `${Math.max(4, 100 - (distanceToPOI / 600) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-stone-300 text-xs w-10 text-right flex-shrink-0">{formatDist(distanceToPOI)}</span>
+              </>
+            ) : (
+              <div className="flex-1" />
+            )}
+            {/* Route list icon button */}
+            <button
+              onClick={() => setShowManualList(true)}
+              className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300 flex-shrink-0"
+              title={language === 'es' ? 'Ver paradas' : 'View stops'}
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+              </svg>
+            </button>
+            {/* Maps overflow button */}
+            <button
+              onClick={() => setShowDownload(true)}
+              className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300 flex-shrink-0"
+              title={language === 'es' ? 'Más opciones' : 'More options'}
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
 
-          {/* Open in native maps */}
-          {currentPOI && (
-            <div className="flex gap-2 mb-3">
-              <a
-                href={`https://www.google.com/maps/dir/?api=1&destination=${currentPOI.lat},${currentPOI.lon}&travelmode=walking`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 flex items-center justify-center gap-1 bg-stone-800 text-blue-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
-              >
-                🗺️ Google
-              </a>
-              <a
-                href={`maps://maps.apple.com/?daddr=${currentPOI.lat},${currentPOI.lon}&dirflg=w`}
-                className="flex-1 flex items-center justify-center gap-1 bg-stone-800 text-stone-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
-              >
-                🍎 Apple
-              </a>
-              <a
-                href={`https://www.waze.com/ul?ll=${currentPOI.lat},${currentPOI.lon}&navigate=yes`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 flex items-center justify-center gap-1 bg-stone-800 text-cyan-300 text-xs font-medium py-2 rounded-xl active:scale-95 transition-transform"
-              >
-                🔵 Waze
-              </a>
-            </div>
-          )}
-
-          {/* Route stops toggle */}
-          <button
-            onClick={() => setShowManualList(true)}
-            className="w-full flex items-center justify-between px-4 py-2.5 bg-stone-800 rounded-xl mb-3 text-stone-300"
-          >
-            <span className="text-sm font-medium">
-              {language === 'es' ? `📋 Paradas de la ruta (${pois.length})` : `📋 Route stops (${pois.length})`}
-            </span>
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-            </svg>
-          </button>
-
+          {/* Primary action: Arrival button */}
           {distanceToPOI !== null && distanceToPOI < 120 ? (
             <button
               onClick={triggerArrival}
-              className="w-full py-4 bg-green-600 text-white font-bold rounded-2xl text-lg active:scale-95 transition-transform shadow-lg shadow-green-900/40"
+              className="w-full py-4 bg-green-500 text-white font-black rounded-2xl text-lg active:scale-95 transition-transform shadow-lg shadow-green-900/40"
             >
               ✅ {language === 'es' ? '¡He llegado!' : "I've arrived!"}
             </button>
           ) : (
             <button
               onClick={triggerArrival}
-              className="w-full py-3 bg-stone-700 text-stone-300 font-medium rounded-2xl text-sm active:scale-95 transition-transform"
+              className="w-full py-3 bg-stone-700 text-stone-400 font-medium rounded-2xl text-sm active:scale-95 transition-transform"
             >
-              📍 {language === 'es' ? 'Confirmar llegada manualmente' : 'Confirm arrival manually'}
+              📍 {language === 'es' ? 'Confirmar llegada' : 'Confirm arrival'}
             </button>
           )}
         </div>
@@ -718,10 +895,47 @@ export function ActiveRoutePage() {
           </div>
         </BottomSheet>
 
-        {/* Offline download */}
+        {/* Options sheet: map apps + offline download */}
         {showDownload && (
-          <BottomSheet isOpen onClose={() => setShowDownload(false)} title={language === 'es' ? 'Uso sin conexión' : 'Offline use'}>
-            <OfflineDownload route={currentRoute} onComplete={() => setShowDownload(false)} />
+          <BottomSheet isOpen onClose={() => setShowDownload(false)} title={language === 'es' ? 'Opciones' : 'Options'}>
+            <div className="flex flex-col gap-3">
+              {/* Open in native maps */}
+              {currentPOI && (
+                <div>
+                  <p className="text-stone-500 text-xs font-semibold uppercase tracking-wide mb-2">
+                    {language === 'es' ? 'Navegar con app externa' : 'Navigate with external app'}
+                  </p>
+                  <div className="flex gap-2">
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${currentPOI.lat},${currentPOI.lon}&travelmode=walking`}
+                      target="_blank" rel="noopener noreferrer"
+                      className="flex-1 flex flex-col items-center gap-1 bg-blue-50 text-blue-600 text-xs font-semibold py-3 rounded-xl active:scale-95"
+                    >
+                      <span className="text-xl">🗺️</span> Google Maps
+                    </a>
+                    <a
+                      href={`https://www.waze.com/ul?ll=${currentPOI.lat},${currentPOI.lon}&navigate=yes`}
+                      target="_blank" rel="noopener noreferrer"
+                      className="flex-1 flex flex-col items-center gap-1 bg-cyan-50 text-cyan-600 text-xs font-semibold py-3 rounded-xl active:scale-95"
+                    >
+                      <span className="text-xl">🔵</span> Waze
+                    </a>
+                    <a
+                      href={`maps://maps.apple.com/?daddr=${currentPOI.lat},${currentPOI.lon}&dirflg=w`}
+                      className="flex-1 flex flex-col items-center gap-1 bg-stone-100 text-stone-600 text-xs font-semibold py-3 rounded-xl active:scale-95"
+                    >
+                      <span className="text-xl">🍎</span> Apple Maps
+                    </a>
+                  </div>
+                </div>
+              )}
+              <div>
+                <p className="text-stone-500 text-xs font-semibold uppercase tracking-wide mb-2">
+                  {language === 'es' ? 'Uso sin conexión' : 'Offline use'}
+                </p>
+                <OfflineDownload route={currentRoute} onComplete={() => setShowDownload(false)} />
+              </div>
+            </div>
           </BottomSheet>
         )}
       </div>
@@ -864,23 +1078,33 @@ export function ActiveRoutePage() {
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur-sm border-t border-stone-100 safe-bottom">
           {phase === 'post_poi' ? (
             <>
-              {nextPOIObj && (
-                <p className="text-stone-400 text-xs text-center mb-3">
-                  {language === 'es' ? `Siguiente parada: ${nextPOIObj.name}` : `Next stop: ${nextPOIObj.name}`}
-                </p>
-              )}
-              <Button fullWidth size="lg" onClick={advanceToNext}>
-                {isLast
-                  ? (language === 'es' ? '🏁 Finalizar ruta' : '🏁 Finish route')
-                  : (language === 'es' ? '🚶 ¡Siguiente parada!' : '🚶 Next stop!')}
-              </Button>
-              {!isLast && (
+              {isLast ? (
                 <button
-                  onClick={() => setPhase('complete')}
-                  className="w-full text-center text-stone-400 text-sm mt-2 py-1"
+                  onClick={advanceToNext}
+                  className="w-full py-4 bg-orange-500 text-white font-black text-lg rounded-2xl active:scale-95 transition-transform shadow-lg shadow-orange-200 mb-2"
                 >
-                  {language === 'es' ? 'Terminar la ruta aquí' : 'End route here'}
+                  🏁 {language === 'es' ? 'Finalizar ruta' : 'Finish route'}
                 </button>
+              ) : (
+                <>
+                  <button
+                    onClick={advanceToNext}
+                    className="w-full py-4 bg-blue-600 text-white font-black text-base rounded-2xl active:scale-95 transition-transform shadow-lg shadow-blue-200 mb-2 flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <circle cx="12" cy="12" r="3" fill="white" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" strokeLinecap="round" /><circle cx="12" cy="12" r="8" strokeOpacity="0.4" />
+                    </svg>
+                    {language === 'es'
+                      ? `🚶 Ir a: ${nextPOIObj?.name || 'Siguiente parada'}`
+                      : `🚶 Go to: ${nextPOIObj?.name || 'Next stop'}`}
+                  </button>
+                  <button
+                    onClick={() => setPhase('complete')}
+                    className="w-full text-center text-stone-400 text-sm py-1"
+                  >
+                    {language === 'es' ? 'Finalizar ruta aquí' : 'End route here'}
+                  </button>
+                </>
               )}
             </>
           ) : (
@@ -950,30 +1174,101 @@ export function ActiveRoutePage() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
-          {canShare && (
-            <button
-              onClick={handleShare}
-              className="w-full py-4 bg-orange-500 text-white font-bold rounded-2xl text-base active:scale-95 transition-transform shadow-lg shadow-orange-900/40"
-            >
-              📤 {language === 'es' ? 'Compartir mi ruta' : 'Share my tour'}
-            </button>
-          )}
-          <Button
-            fullWidth
-            variant={canShare ? 'secondary' : 'primary'}
-            onClick={() => {
-              setPhase('selecting_start')
-              setCurrentPOIIndex(0)
-            }}
+        {/* Share */}
+        {canShare && (
+          <button
+            onClick={handleShare}
+            className="w-full py-3 bg-orange-500 text-white font-bold rounded-2xl text-base active:scale-95 transition-transform shadow-lg shadow-orange-900/40 mb-4"
           >
-            {language === 'es' ? '🔄 Repetir ruta' : '🔄 Repeat route'}
-          </Button>
-          <Button fullWidth variant="ghost" onClick={() => navigate('/')}>
-            {language === 'es' ? '🏠 Volver al inicio' : '🏠 Go home'}
-          </Button>
+            📤 {language === 'es' ? 'Compartir mi ruta' : 'Share my tour'}
+          </button>
+        )}
+
+        <p className="text-stone-400 text-sm font-semibold mb-3">
+          {language === 'es' ? '¿Qué quieres hacer ahora?' : 'What would you like to do next?'}
+        </p>
+
+        <div className="flex flex-col gap-3">
+          {/* Option 1: New route */}
+          <button
+            onClick={() => { stopTTS(); navigate('/') }}
+            className="w-full py-4 bg-white/10 border border-white/20 text-white font-bold rounded-2xl text-base active:scale-95 transition-transform flex items-center gap-4 px-5"
+          >
+            <span className="text-2xl">🗺️</span>
+            <div className="text-left">
+              <p className="font-black">{language === 'es' ? 'Iniciar nueva ruta' : 'Start new route'}</p>
+              <p className="text-stone-400 text-xs font-normal">
+                {language === 'es' ? 'Elige otra ciudad o tipo de ruta' : 'Choose another city or route type'}
+              </p>
+            </div>
+          </button>
+
+          {/* Option 2: Navigate to a specific place */}
+          <button
+            onClick={() => { stopTTS(); setShowNavigateTo(true) }}
+            className="w-full py-4 bg-white/10 border border-white/20 text-white font-bold rounded-2xl text-base active:scale-95 transition-transform flex items-center gap-4 px-5"
+          >
+            <span className="text-2xl">🧭</span>
+            <div className="text-left">
+              <p className="font-black">{language === 'es' ? 'Navegar a un lugar' : 'Navigate to a place'}</p>
+              <p className="text-stone-400 text-xs font-normal">
+                {language === 'es' ? 'Escribe una dirección o punto de interés' : 'Enter an address or point of interest'}
+              </p>
+            </div>
+          </button>
+
+          {/* Option 3: End completely */}
+          <button
+            onClick={() => { stopTTS(); navigate('/') }}
+            className="w-full py-3 text-stone-400 text-sm font-medium active:scale-95 transition-transform"
+          >
+            ✅ {language === 'es' ? 'Finalizar completamente' : 'End completely'}
+          </button>
         </div>
       </div>
+
+      {/* Navigate to a place sheet */}
+      {showNavigateTo && (
+        <BottomSheet
+          isOpen
+          onClose={() => setShowNavigateTo(false)}
+          title={language === 'es' ? 'Navegar a un lugar' : 'Navigate to a place'}
+        >
+          <div className="flex flex-col gap-3">
+            <p className="text-stone-500 text-sm">
+              {language === 'es'
+                ? 'Escribe una dirección, monumento o punto de interés para abrir la navegación en tu app de mapas.'
+                : 'Enter an address, landmark or point of interest to open navigation in your maps app.'}
+            </p>
+            <input
+              type="text"
+              value={navigateToInput}
+              onChange={e => setNavigateToInput(e.target.value)}
+              placeholder={language === 'es' ? 'Ej: Catedral, Plaza Mayor...' : 'E.g: Cathedral, Main Square...'}
+              className="w-full border border-stone-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+              autoFocus
+            />
+            <div className="flex flex-col gap-2">
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(navigateToInput + ' ' + currentRoute.city.name)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setShowNavigateTo(false)}
+                className={`w-full py-3.5 bg-orange-500 text-white font-bold rounded-2xl text-center text-sm active:scale-95 transition-transform ${!navigateToInput.trim() ? 'opacity-40 pointer-events-none' : ''}`}
+              >
+                🗺️ {language === 'es' ? 'Abrir en Google Maps' : 'Open in Google Maps'}
+              </a>
+              <a
+                href={`maps://maps.apple.com/?q=${encodeURIComponent(navigateToInput + ' ' + currentRoute.city.name)}`}
+                onClick={() => setShowNavigateTo(false)}
+                className={`w-full py-3 bg-stone-100 text-stone-700 font-semibold rounded-2xl text-center text-sm active:scale-95 transition-transform ${!navigateToInput.trim() ? 'opacity-40 pointer-events-none' : ''}`}
+              >
+                🍎 {language === 'es' ? 'Abrir en Apple Maps' : 'Open in Apple Maps'}
+              </a>
+            </div>
+          </div>
+        </BottomSheet>
+      )}
     </div>
   )
 }

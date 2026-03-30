@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { getAllRoutes, deleteRoute } from '../services/storage'
 import { Button } from '../components/ui/Button'
+import { OfflineDownload } from '../components/OfflineDownload'
 import type { Route } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
@@ -11,6 +12,8 @@ export function OfflineRoutesPage() {
   const { language, setCity, setRouteType, setDuration, setPOIs, setRoute } = useAppStore()
   const [routes, setRoutes] = useState<Route[]>([])
   const [loading, setLoading] = useState(true)
+  const [pendingRoute, setPendingRoute] = useState<Route | null>(null)
+  const [showDownloadInSheet, setShowDownloadInSheet] = useState(false)
 
   useEffect(() => {
     getAllRoutes().then(r => {
@@ -24,7 +27,7 @@ export function OfflineRoutesPage() {
     setRoutes(prev => prev.filter(r => r.id !== id))
   }
 
-  function handleLoad(route: Route) {
+  function loadAndNavigate(route: Route) {
     setCity(route.city)
     setRouteType(route.routeType)
     setDuration(route.duration)
@@ -88,7 +91,7 @@ export function OfflineRoutesPage() {
               return (
                 <div key={route.id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
                   <button
-                    onClick={() => handleLoad(route)}
+                    onClick={() => { setPendingRoute(route); setShowDownloadInSheet(false) }}
                     className="w-full text-left p-4 active:bg-stone-50 transition-colors"
                   >
                     <div className="flex items-start gap-3">
@@ -134,6 +137,78 @@ export function OfflineRoutesPage() {
           </div>
         )}
       </div>
+
+      {/* Route load options modal */}
+      {pendingRoute && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setPendingRoute(null)} />
+          <div className="relative bg-white rounded-t-3xl px-5 pt-5 pb-8 safe-bottom">
+            <div className="w-10 h-1 bg-stone-200 rounded-full mx-auto mb-4" />
+            <h2 className="font-black text-stone-900 text-lg mb-1">
+              {pendingRoute.city.name}
+            </h2>
+            <p className="text-stone-400 text-sm mb-5">
+              {(() => {
+                const ri = ROUTE_TYPE_INFO.find(r => r.id === pendingRoute.routeType)
+                return ri ? (language === 'es' ? ri.labelEs : ri.labelEn) : pendingRoute.routeType
+              })()}
+              {' · '}{pendingRoute.pois.length} {language === 'es' ? 'paradas' : 'stops'}
+            </p>
+
+            {showDownloadInSheet ? (
+              <>
+                <p className="text-stone-500 text-xs font-semibold uppercase tracking-wide mb-3">
+                  {language === 'es' ? 'Descarga de audio' : 'Audio download'}
+                </p>
+                <OfflineDownload route={pendingRoute} onComplete={() => { setShowDownloadInSheet(false) }} />
+                <button
+                  onClick={() => setShowDownloadInSheet(false)}
+                  className="w-full mt-3 py-3 text-stone-400 text-sm font-medium"
+                >
+                  {language === 'es' ? 'Volver' : 'Back'}
+                </button>
+              </>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {/* Option 1: Start online */}
+                <button
+                  onClick={() => { setPendingRoute(null); loadAndNavigate(pendingRoute) }}
+                  className="w-full py-4 bg-orange-500 text-white font-bold rounded-2xl text-base active:scale-95 transition-transform flex items-center gap-4 px-5"
+                >
+                  <span className="text-2xl">▶️</span>
+                  <div className="text-left">
+                    <p className="font-black">{language === 'es' ? 'Iniciar ruta' : 'Start route'}</p>
+                    <p className="text-orange-100 text-xs font-normal">
+                      {language === 'es' ? 'Usar recursos online (audio + mapa)' : 'Use online resources (audio + map)'}
+                    </p>
+                  </div>
+                </button>
+
+                {/* Option 2: Download audio first */}
+                <button
+                  onClick={() => setShowDownloadInSheet(true)}
+                  className="w-full py-4 bg-stone-100 text-stone-800 font-bold rounded-2xl text-base active:scale-95 transition-transform flex items-center gap-4 px-5"
+                >
+                  <span className="text-2xl">📥</span>
+                  <div className="text-left">
+                    <p className="font-black">{language === 'es' ? 'Descargar audio primero' : 'Download audio first'}</p>
+                    <p className="text-stone-400 text-xs font-normal">
+                      {language === 'es' ? 'Guarda las narraciones para uso sin conexión' : 'Save narrations for offline use'}
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setPendingRoute(null)}
+                  className="w-full py-3 text-stone-400 text-sm font-medium"
+                >
+                  {language === 'es' ? 'Cancelar' : 'Cancel'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
