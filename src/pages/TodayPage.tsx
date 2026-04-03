@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { RouteTypeSelector } from '../components/RouteTypeSelector'
 import { DurationSelector } from '../components/DurationSelector'
+import { AudioPlayer } from '../components/AudioPlayer'
 import { Button } from '../components/ui/Button'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
+import { getPOIInfoMultiSource, generateAudioScript } from '../services/wikipedia'
+import { generateAIPOIExplanation, getAIKey, hasAIKey } from '../services/ai'
 import { ROUTE_TYPE_INFO } from '../types'
-import type { City, RouteType, RouteDuration } from '../types'
+import type { City, RouteType, RouteDuration, WikiResult } from '../types'
 
 interface DetectedLocation {
   city: City
@@ -53,13 +56,22 @@ export function TodayPage() {
   const {
     language, setCity, setRouteType, setDuration,
     selectedRouteType, selectedDuration, getVisitedPOINames,
-    setUserLocation
+    setUserLocation, anthropicApiKey
   } = useAppStore()
 
   const [phase, setPhase] = useState<'locating' | 'selecting' | 'error'>('locating')
   const [location, setLocation] = useState<DetectedLocation | null>(null)
   const [geoError, setGeoError] = useState<string | null>(null)
   const [avoidVisited, setAvoidVisited] = useState(true)
+  const [userCoords, setUserCoords] = useState<[number, number] | null>(null)
+
+  // POI search state
+  const [poiQuery, setPoiQuery] = useState('')
+  const [poiResult, setPoiResult] = useState<WikiResult | null>(null)
+  const [poiAudioScript, setPoiAudioScript] = useState('')
+  const [poiSearchLoading, setPoiSearchLoading] = useState(false)
+  const [poiAudioLoading, setPoiAudioLoading] = useState(false)
+  const [searchExpanded, setSearchExpanded] = useState(false)
 
   const es = language === 'es'
 
@@ -73,6 +85,7 @@ export function TodayPage() {
 
     navigator.geolocation.getCurrentPosition(
       async pos => {
+        setUserCoords([pos.coords.latitude, pos.coords.longitude])
         // Store GPS location globally so ActiveRoutePage can use it immediately
         setUserLocation([pos.coords.latitude, pos.coords.longitude])
         const result = await reverseGeocode(pos.coords.latitude, pos.coords.longitude)
@@ -99,6 +112,61 @@ export function TodayPage() {
       { enableHighAccuracy: true, timeout: 6000 }
     )
   }, [])
+
+  async function searchPOI(query: string) {
+    if (!query.trim()) return
+    setPoiSearchLoading(true)
+    setPoiResult(null)
+    setPoiAudioScript('')
+    try {
+      const result = await getPOIInfoMultiSource(query.trim(), language)
+      if (!result) {
+        setPoiSearchLoading(false)
+        return
+      }
+      setPoiResult(result)
+      setPoiSearchLoading(false)
+
+      // Generate audio explanation
+      setPoiAudioLoading(true)
+      const cityName = location?.city.name || ''
+      let audio: string | null = null
+      if (hasAIKey(anthropicApiKey)) {
+        audio = await generateAIPOIExplanation(result.title, cityName, result.extract, language, getAIKey(anthropicApiKey))
+      }
+      if (!audio) {
+        audio = generateAudioScript({ name: result.title, category: 'lugar de interés', description: result.extract }, language)
+      }
+      setPoiAudioScript(audio || '')
+    } catch {
+      setPoiSearchLoading(false)
+    } finally {
+      setPoiAudioLoading(false)
+    }
+  }
+
+  async function handleWhatIsHere() {
+    if (!userCoords) return
+    setPoiSearchLoading(true)
+    setPoiResult(null)
+    setPoiAudioScript('')
+    try {
+      // Reverse geocode to nearest named place
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${userCoords[0]}&lon=${userCoords[1]}&zoom=18&addressdetails=1`,
+        { headers: { 'Accept-Language': es ? 'es' : 'en' } }
+      )
+      if (!resp.ok) { setPoiSearchLoading(false); return }
+      const data = await resp.json() as { name?: string; display_name?: string; namedetails?: Record<string, string> }
+      const placeName = data.namedetails?.name || data.name || data.display_name?.split(',')[0] || ''
+      if (!placeName) { setPoiSearchLoading(false); return }
+      setPoiQuery(placeName)
+      setPoiSearchLoading(false)
+      await searchPOI(placeName)
+    } catch {
+      setPoiSearchLoading(false)
+    }
+  }
 
   function handleStart() {
     if (!location || !selectedRouteType || !selectedDuration) return
@@ -199,6 +267,143 @@ export function TodayPage() {
                       : (es ? `Incluir también lugares ya visitados` : `Also include already visited places`)}
                   </p>
                 </button>
+              </div>
+            )}
+          </div>
+
+          {/* ---- POI Search ---- */}
+          <div className="mb-6">
+            <button
+              onClick={() => setSearchExpanded(e => !e)}
+              className="w-full flex items-center justify-between bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-left"
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-xl">🔍</span>
+                <div>
+                  <p className="text-white font-bold text-sm">
+                    {es ? 'Buscar lugar de interés' : 'Search a point of interest'}
+                  </p>
+                  <p className="text-blue-300 text-xs">
+                    {es ? '¿Qué es este lugar? ¿Qué hay cerca?' : 'What is this place? What\'s nearby?'}
+                  </p>
+                </div>
+              </div>
+              <svg className={`w-5 h-5 text-white/50 transition-transform ${searchExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {searchExpanded && (
+              <div className="mt-3 bg-white/10 border border-white/10 rounded-2xl p-4">
+                {/* Search input row */}
+                <div className="flex gap-2 mb-3">
+                  <input
+                    type="text"
+                    value={poiQuery}
+                    onChange={e => setPoiQuery(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && searchPOI(poiQuery)}
+                    placeholder={es ? 'Catedral, Plaza Mayor, Museo...' : 'Cathedral, Main Square, Museum...'}
+                    className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-white placeholder-white/40 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  />
+                  <button
+                    onClick={() => searchPOI(poiQuery)}
+                    disabled={poiSearchLoading || !poiQuery.trim()}
+                    className="w-11 h-11 bg-orange-500 rounded-xl flex items-center justify-center text-white flex-shrink-0 disabled:opacity-40 active:scale-95 transition-transform"
+                  >
+                    {poiSearchLoading ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+
+                {/* What's here button */}
+                {userCoords && (
+                  <button
+                    onClick={handleWhatIsHere}
+                    disabled={poiSearchLoading}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 bg-white/10 border border-white/20 text-white/80 text-sm font-medium rounded-xl mb-3 active:scale-95 transition-transform disabled:opacity-40"
+                  >
+                    📍 {es ? '¿Qué hay donde estoy ahora?' : 'What\'s at my current location?'}
+                  </button>
+                )}
+
+                {/* Search result */}
+                {poiSearchLoading && !poiResult && (
+                  <div className="flex items-center gap-3 py-4 justify-center">
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <p className="text-white/60 text-sm">{es ? 'Buscando en múltiples fuentes...' : 'Searching multiple sources...'}</p>
+                  </div>
+                )}
+
+                {poiResult && (
+                  <div className="rounded-2xl overflow-hidden bg-white/5 border border-white/10">
+                    {/* Image */}
+                    {poiResult.imageUrl && (
+                      <div className="relative" style={{ height: '36vw', minHeight: 120, maxHeight: 220 }}>
+                        <img
+                          src={poiResult.imageUrl}
+                          alt={poiResult.title}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+                        <div className="absolute bottom-3 left-3 right-3">
+                          <p className="text-white font-black text-base leading-tight">{poiResult.title}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="p-4">
+                      {!poiResult.imageUrl && (
+                        <p className="text-white font-black text-base mb-2">{poiResult.title}</p>
+                      )}
+
+                      {/* Audio player */}
+                      {poiAudioLoading ? (
+                        <div className="flex items-center gap-2 bg-white/10 rounded-xl px-3 py-2.5 mb-3">
+                          <div className="w-4 h-4 border-2 border-orange-300/40 border-t-orange-300 rounded-full animate-spin flex-shrink-0" />
+                          <p className="text-white/60 text-xs">{es ? 'Preparando guía de audio...' : 'Preparing audio guide...'}</p>
+                        </div>
+                      ) : poiAudioScript ? (
+                        <div className="mb-3">
+                          <AudioPlayer
+                            text={poiAudioScript}
+                            poiName={poiResult.title}
+                            autoPlay={false}
+                          />
+                        </div>
+                      ) : null}
+
+                      {/* Description excerpt */}
+                      {poiResult.extract && (
+                        <p className="text-white/70 text-xs leading-relaxed line-clamp-4">
+                          {poiResult.extract}
+                        </p>
+                      )}
+
+                      {/* Source link */}
+                      {poiResult.url && (
+                        <a
+                          href={poiResult.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-blue-300 text-xs mt-2 underline underline-offset-2"
+                        >
+                          {es ? 'Más información →' : 'More info →'}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {!poiSearchLoading && !poiResult && poiQuery && (
+                  <p className="text-white/50 text-sm text-center py-3">
+                    {es ? 'No se encontró información. Prueba con otro nombre.' : 'No info found. Try a different name.'}
+                  </p>
+                )}
               </div>
             )}
           </div>

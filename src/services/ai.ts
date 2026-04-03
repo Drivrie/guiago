@@ -307,6 +307,7 @@ ${reason ? `Por qué es especial: ${reason}` : ''}
 ${insiderTip ? `Dato insider: ${insiderTip}` : ''}
 
 ESTRUCTURA OBLIGATORIA:
+0. PRIMERO (1-2 frases): pide al visitante que mire la imagen en pantalla para confirmar que está en el lugar correcto. Ej: "Mira la imagen que aparece en tu pantalla, ¿ves [descripción breve de la imagen]? ¡Eso es ${poiName}! Comprueba que estás frente a él."
 1. Abre con algo que capture atención AL INSTANTE: una pregunta sorprendente, una imagen vívida, o un dato impactante. NO empieces con "Bienvenido" ni "Aquí estamos".
 2. Cuenta 1-2 datos fascinantes y concretos de forma conversacional, como si se los contaras a un amigo
 3. Si hay insider tip, preséntalo como un secreto exclusivo: "Poca gente lo sabe, pero..."
@@ -320,6 +321,7 @@ ${reason ? `Why it's special: ${reason}` : ''}
 ${insiderTip ? `Insider tip: ${insiderTip}` : ''}
 
 REQUIRED STRUCTURE:
+0. FIRST (1-2 sentences): ask the visitor to look at the image on screen to confirm they're at the right place. E.g.: "Take a look at the image on your screen — do you see [brief image description]? That's ${poiName}! Make sure you're standing in front of it."
 1. Open with something that grabs attention INSTANTLY: a surprising question, a vivid image, or a shocking fact. Do NOT start with "Welcome" or "Here we are".
 2. Share 1-2 fascinating, concrete facts conversationally, as if telling a friend
 3. If there's an insider tip, present it as an exclusive secret: "Not many people know that..."
@@ -331,6 +333,59 @@ REQUIRED STRUCTURE:
     return await callAI(system, user, getAIKey(userKey), 500)
   } catch (err) {
     console.error('AI audio script error:', err)
+    return null
+  }
+}
+
+/**
+ * Generate a conversational POI explanation for the "What to visit today?" search feature.
+ * Similar to generateAIAudioScript but tailored for standalone place lookup
+ * (the visitor may not be physically there yet — they're discovering or confirming the place).
+ * Sources knowledge in the style of Civitatis, Talkative, SmartGuide and Wikivoyage guides.
+ */
+export async function generateAIPOIExplanation(
+  poiName: string,
+  cityName: string,
+  description: string,
+  lang: Language,
+  userKey: string
+): Promise<string | null> {
+  const system =
+    lang === 'es'
+      ? `Eres un guía turístico experto al estilo de Civitatis, Talkative, SmartGuide o Wikivoyage. Combinas datos históricos fascinantes con consejos prácticos de viajero. Tu voz es cálida, directa y apasionada. Siempre tuteas al visitante. Hablas como alguien que conoce el lugar de primera mano, no como un artículo enciclopédico.`
+      : `You are an expert tour guide in the style of Civitatis, Talkative, SmartGuide or Wikivoyage. You combine fascinating historical facts with practical traveler tips. Your voice is warm, direct and passionate. You speak as someone who knows the place first-hand, not like an encyclopedic article.`
+
+  const user =
+    lang === 'es'
+      ? `Genera una explicación de audio sobre "${poiName}" en ${cityName}.
+
+${description ? `Información de base: ${description.slice(0, 400)}` : ''}
+
+ESTRUCTURA:
+0. Empieza pidiendo al visitante que mire la imagen en pantalla: "Mira la imagen que aparece, ¿ves [descripción visual breve]? Eso es ${poiName}." (1-2 frases)
+1. Un dato histórico o cultural sorprendente y concreto (no genérico)
+2. Qué ver específicamente: dónde mirar, qué detalle no perderse
+3. Un consejo práctico insider: mejor hora, entrada, secreto local
+4. Cierra invitando a explorar
+
+100-150 palabras. SOLO la narración, sin comillas, sin títulos. Tono vivo y personal.`
+      : `Generate an audio explanation about "${poiName}" in ${cityName}.
+
+${description ? `Background info: ${description.slice(0, 400)}` : ''}
+
+STRUCTURE:
+0. Start by asking the visitor to look at the image on screen: "Look at the image showing — do you see [brief visual description]? That's ${poiName}." (1-2 sentences)
+1. One surprising, concrete historical or cultural fact (not generic)
+2. What to look at specifically: where to look, which detail not to miss
+3. A practical insider tip: best time to visit, ticket info, local secret
+4. Close by inviting them to explore
+
+100-150 words. ONLY the narration, no quotes, no titles. Lively and personal tone.`
+
+  try {
+    return await callAI(system, user, getAIKey(userKey), 500)
+  } catch (err) {
+    console.error('AI POI explanation error:', err)
     return null
   }
 }
