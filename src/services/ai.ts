@@ -182,6 +182,7 @@ async function callAI(system: string, user: string, userKey: string, maxTokens =
 /** Generate a Civitatis-quality curated route with AI */
 export async function generateAIRoute(
   cityName: string,
+  countryName: string,
   routeType: RouteType,
   durationMinutes: number,
   lang: Language,
@@ -191,6 +192,8 @@ export async function generateAIRoute(
   // More POIs: 1 per 15 min, min 5, max 15
   const maxPOIs = Math.max(5, Math.min(15, Math.floor(durationMinutes / 15)))
   const typeDesc = ROUTE_TYPE_DESC[routeType][lang]
+  // Always use "CityName, Country" to avoid ambiguity (e.g. Roma Poland vs Roma Italy)
+  const locationDesc = countryName ? `${cityName}, ${countryName}` : cityName
   const excludeClause =
     excludeNames.length > 0
       ? lang === 'es'
@@ -205,50 +208,52 @@ export async function generateAIRoute(
 
   const user =
     lang === 'es'
-      ? `Diseña una ruta turística de MÁXIMA CALIDAD para ${cityName}:
+      ? `Diseña una ruta turística de MÁXIMA CALIDAD para ${locationDesc}:
 - Temática: ${typeDesc}
 - Duración total de visita: ${durationMinutes} minutos (sin contar desplazamientos)
 - Número de paradas: ${maxPOIs}${excludeClause}
 
 REQUISITOS ESTRICTOS (al nivel de Civitatis o Walkative):
-1. TODOS los lugares deben estar físicamente EN ${cityName}, no en pueblos ni ciudades cercanas
-2. Distancia máxima entre paradas consecutivas: 600-800 metros a pie
-3. Orden geográfico óptimo para caminar sin rodeos — ruta circular o lineal lógica
-4. Coherencia temática perfecta — cada parada refuerza el hilo narrativo
-5. Información histórica específica y verificable, no genérica
-6. Consejos insider reales: horarios óptimos, entradas, trucos locales, qué evitar
+1. TODOS los lugares deben estar físicamente EN ${locationDesc} — no en otras ciudades, provincias ni países
+2. Los nombres de los lugares deben ser los nombres LOCALES u oficiales usados en Wikipedia, en el idioma original del país (por ejemplo, si la ciudad es polaca, usar nombres polacos o en inglés reconocibles)
+3. Distancia máxima entre paradas consecutivas: 600-800 metros a pie
+4. Orden geográfico óptimo para caminar sin rodeos — ruta circular o lineal lógica
+5. Coherencia temática perfecta — cada parada refuerza el hilo narrativo
+6. Información histórica específica y verificable, no genérica
+7. Consejos insider reales: horarios óptimos, entradas, trucos locales, qué evitar
 
 JSON exacto (sin texto fuera del JSON):
 {
   "routeStory": "Narrativa de apertura evocadora en 2-3 frases: describe la atmósfera, el hilo conductor y por qué esta ruta es especial. Estilo literario, apasionado, que invite a explorar.",
   "suggestedPOIs": [
     {
-      "name": "Nombre oficial completo y exacto del lugar en ${cityName}",
+      "name": "Nombre oficial completo y exacto del lugar en ${locationDesc} — preferiblemente en inglés o el idioma local, como aparece en Wikipedia",
       "category": "categoría precisa (catedral/museo/plaza/palacio/jardín/mercado/barrio/iglesia/etc)",
       "reason": "Por qué es imprescindible en esta ruta: 1-2 datos históricos o culturales fascinantes y específicos",
       "insiderTip": "Consejo práctico y concreto: hora mejor para visitar, entrada gratuita, detalle que pocos conocen, qué pedir, dónde sentarse. null si no hay nada relevante."
     }
   ]
 }`
-      : `Design a MAXIMUM QUALITY tour for ${cityName}:
+      : `Design a MAXIMUM QUALITY tour for ${locationDesc}:
 - Theme: ${typeDesc}
 - Total visit duration: ${durationMinutes} minutes (excluding walking)
 - Number of stops: ${maxPOIs}${excludeClause}
 
 STRICT REQUIREMENTS (Civitatis / Walkative level):
-1. ALL places must be physically IN ${cityName} — not nearby towns or cities
-2. Max walking distance between consecutive stops: 600-800 meters
-3. Optimal geographic order — no unnecessary backtracking, logical circular or linear route
-4. Perfect thematic coherence — every stop reinforces the narrative thread
-5. Specific, verifiable historical information — not generic descriptions
-6. Real insider tips: optimal visit times, tickets, local tricks, what to avoid
+1. ALL places must be physically IN ${locationDesc} — not in other cities, regions, or countries
+2. Use the LOCAL or official Wikipedia name for each place (e.g. for a Polish city, use Polish or internationally recognised English names)
+3. Max walking distance between consecutive stops: 600-800 meters
+4. Optimal geographic order — no unnecessary backtracking, logical circular or linear route
+5. Perfect thematic coherence — every stop reinforces the narrative thread
+6. Specific, verifiable historical information — not generic descriptions
+7. Real insider tips: optimal visit times, tickets, local tricks, what to avoid
 
 Exact JSON (no text outside JSON):
 {
   "routeStory": "Evocative opening narrative in 2-3 sentences: describe the atmosphere, the connecting thread, why this route is special. Literary, passionate style that invites exploration.",
   "suggestedPOIs": [
     {
-      "name": "Official full exact name of the place in ${cityName}",
+      "name": "Official full exact name of the place in ${locationDesc} — preferably in English or local language as it appears on Wikipedia",
       "category": "precise category (cathedral/museum/square/palace/garden/market/neighborhood/church/etc)",
       "reason": "Why it's essential on this route: 1-2 fascinating, specific historical or cultural facts",
       "insiderTip": "Practical, concrete tip: best time to visit, free entry, detail few people know, what to order, where to sit. null if nothing relevant."
