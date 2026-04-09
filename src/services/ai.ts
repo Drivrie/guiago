@@ -1,4 +1,5 @@
 import type { RouteType, Language } from '../types'
+import { getActiveLocalModel, isLocalModelLoaded, callLocalModel } from './localAI'
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -28,7 +29,8 @@ export function getAIKey(userKey: string): string { return userKey?.trim() || BU
 export function hasBuiltInKey(): boolean { return !!BUILT_IN_MISTRAL_KEY }
 
 /** Which AI engine is active given a userKey */
-export function activeEngine(userKey: string): 'mistral_user' | 'mistral_builtin' | 'pollinations' {
+export function activeEngine(userKey: string): 'local' | 'mistral_user' | 'mistral_builtin' | 'pollinations' {
+  if (getActiveLocalModel() && isLocalModelLoaded()) return 'local'
   if (userKey?.trim()) return 'mistral_user'
   if (BUILT_IN_MISTRAL_KEY) return 'mistral_builtin'
   return 'pollinations'
@@ -161,9 +163,18 @@ async function callMistral(
 }
 
 /**
- * Calls AI: user key → built-in Mistral key → Pollinations fallback.
+ * Calls AI: local model (offline) → user key → built-in Mistral key → Pollinations fallback.
  */
 async function callAI(system: string, user: string, userKey: string, maxTokens = 1200): Promise<string> {
+  // 1. Try on-device local model first (works fully offline)
+  if (getActiveLocalModel() && isLocalModelLoaded()) {
+    try {
+      return await callLocalModel(system, user, maxTokens)
+    } catch (err) {
+      console.warn('[AI] Local model failed, falling back to online:', err)
+    }
+  }
+  // 2. Online path: user key or built-in Mistral key
   const effectiveKey = userKey || BUILT_IN_MISTRAL_KEY
   if (effectiveKey) {
     try {

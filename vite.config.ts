@@ -10,5 +10,8 @@ export default defineConfig({
     alias: {
       '@': '/src'
     }
-  }
+  },
+  optimizeDeps: {
+    exclude: ['@huggingface/transformers'],
+  },
 })

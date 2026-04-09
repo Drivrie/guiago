@@ -3,6 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
 import { validateApiKey, hasBuiltInKey, activeEngine } from '../services/ai'
+import {
+  LOCAL_MODELS, type LocalModelId,
+  getActiveLocalModel, setActiveLocalModel,
+  isModelCached, loadLocalModel, deleteLocalModelCache,
+  getLoadedModelId, isWebGPUAvailable, unloadLocalModel,
+} from '../services/localAI'
 
 export function SettingsPage() {
   const navigate = useNavigate()
@@ -16,6 +22,57 @@ export function SettingsPage() {
   const [validationResult, setValidationResult] = useState<'ok' | 'error' | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
+
+  // ── Local AI state ──────────────────────────────────────────────────────────
+  const [activeLocalModel, setLocalActiveModel] = useState<LocalModelId | null>(getActiveLocalModel)
+  const [cachedModels, setCachedModels] = useState<LocalModelId[]>(() =>
+    LOCAL_MODELS.filter(m => isModelCached(m.id)).map(m => m.id))
+  const [loadedModel, setLoadedModel] = useState<LocalModelId | null>(getLoadedModelId)
+  const [downloadingModel, setDownloadingModel] = useState<LocalModelId | null>(null)
+  const [downloadProgress, setDownloadProgress] = useState(0)
+  const [downloadLabel, setDownloadLabel] = useState('')
+  const [deleteConfirmId, setDeleteConfirmId] = useState<LocalModelId | null>(null)
+
+  async function handleDownload(id: LocalModelId) {
+    setDownloadingModel(id)
+    setDownloadProgress(0)
+    setDownloadLabel(es ? 'Preparando…' : 'Preparing…')
+    try {
+      await loadLocalModel(id, (pct, label) => {
+        setDownloadProgress(pct)
+        setDownloadLabel(label)
+      })
+      setLoadedModel(id)
+      setLocalActiveModel(id)
+      setCachedModels(prev => prev.includes(id) ? prev : [...prev, id])
+    } catch (err) {
+      console.error('Model download failed:', err)
+      alert(es ? 'Error al descargar el modelo. Comprueba la conexión e inténtalo de nuevo.' : 'Model download failed. Check your connection and try again.')
+    } finally {
+      setDownloadingModel(null)
+    }
+  }
+
+  function handleActivate(id: LocalModelId) {
+    setActiveLocalModel(id)
+    setLocalActiveModel(id)
+    // Model files are cached; they'll be loaded on next AI call
+  }
+
+  function handleDeactivate() {
+    setActiveLocalModel(null)
+    setLocalActiveModel(null)
+    unloadLocalModel()
+    setLoadedModel(null)
+  }
+
+  async function handleDeleteModel(id: LocalModelId) {
+    await deleteLocalModelCache(id)
+    setCachedModels(prev => prev.filter(m => m !== id))
+    if (activeLocalModel === id) { setLocalActiveModel(null) }
+    if (loadedModel === id) { setLoadedModel(null) }
+    setDeleteConfirmId(null)
+  }
 
   const totalVisited = Object.values(visitedPOIs).reduce((acc, arr) => acc + arr.length, 0)
   const citiesVisited = Object.keys(visitedPOIs).length
@@ -104,20 +161,24 @@ export function SettingsPage() {
 
           {/* Active AI engine badge */}
           <div className={`rounded-2xl p-4 mb-4 border ${
+            engine === 'local' ? 'bg-gradient-to-br from-orange-50 to-amber-50 border-orange-200' :
             engine === 'mistral_user' ? 'bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-200' :
             engine === 'mistral_builtin' ? 'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200' :
             'bg-gradient-to-br from-green-50 to-emerald-50 border-green-100'
           }`}>
             <div className="flex items-center gap-3 mb-2">
               <span className="text-2xl">
-                {engine === 'mistral_user' ? '🟣' : engine === 'mistral_builtin' ? '🔵' : '✅'}
+                {engine === 'local' ? '📲' : engine === 'mistral_user' ? '🟣' : engine === 'mistral_builtin' ? '🔵' : '✅'}
               </span>
               <p className={`font-bold text-sm ${
+                engine === 'local' ? 'text-orange-800' :
                 engine === 'mistral_user' ? 'text-purple-800' :
                 engine === 'mistral_builtin' ? 'text-blue-800' :
                 'text-green-800'
               }`}>
-                {engine === 'mistral_user'
+                {engine === 'local'
+                  ? (es ? 'IA local activa — funciona sin internet' : 'Local AI active — works offline')
+                  : engine === 'mistral_user'
                   ? (es ? 'Usando tu clave Mistral AI' : 'Using your Mistral AI key')
                   : engine === 'mistral_builtin'
                   ? (es ? 'Usando Mistral AI integrado' : 'Using built-in Mistral AI')
@@ -125,12 +186,15 @@ export function SettingsPage() {
               </p>
             </div>
             <ul className={`text-sm space-y-1 ml-9 ${
+              engine === 'local' ? 'text-orange-700' :
               engine === 'mistral_user' ? 'text-purple-700' :
               engine === 'mistral_builtin' ? 'text-blue-700' :
               'text-green-700'
             }`}>
               <li>• {es ? 'Rutas curadas estilo Civitatis · narraciones apasionadas' : 'Civitatis-style curated routes · passionate narrations'}</li>
-              <li>• {engine === 'pollinations'
+              <li>• {engine === 'local'
+                ? (es ? `Motor: ${LOCAL_MODELS.find(m => m.id === activeLocalModel)?.name ?? 'modelo local'} · 100% offline` : `Engine: ${LOCAL_MODELS.find(m => m.id === activeLocalModel)?.name ?? 'local model'} · 100% offline`)
+                : engine === 'pollinations'
                 ? (es ? 'Motor: Pollinations.ai (GPT-4o-mini gratuito, sin cuenta)' : 'Engine: Pollinations.ai (free GPT-4o-mini, no account)')
                 : (es ? 'Motor: Mistral AI open-mistral-nemo · máxima fiabilidad' : 'Engine: Mistral AI open-mistral-nemo · maximum reliability')
               }</li>
@@ -215,6 +279,165 @@ export function SettingsPage() {
                 </Button>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* ---- Local AI Section ---- */}
+        <section>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xl">📲</span>
+            <h2 className="font-black text-stone-900 text-lg">
+              {es ? 'IA Offline' : 'Offline AI'}
+            </h2>
+          </div>
+          <p className="text-stone-500 text-sm mb-4 ml-8">
+            {es
+              ? 'Descarga un modelo de IA en tu dispositivo. Una vez descargado, genera rutas y narraciones sin conexión a internet.'
+              : 'Download an AI model to your device. Once downloaded, generate routes and narrations without internet.'}
+          </p>
+
+          {/* WebGPU / WASM badge */}
+          <div className={`rounded-xl px-3 py-2 mb-4 border text-xs font-medium ${
+            isWebGPUAvailable()
+              ? 'bg-green-50 border-green-100 text-green-700'
+              : 'bg-amber-50 border-amber-100 text-amber-700'
+          }`}>
+            {isWebGPUAvailable()
+              ? (es ? '⚡ WebGPU disponible — inferencia acelerada por GPU' : '⚡ WebGPU available — GPU-accelerated inference')
+              : (es ? '⚙️ Sin WebGPU — se usará WASM (compatible con cualquier dispositivo)' : '⚙️ No WebGPU — WASM will be used (works on any device)')}
+          </div>
+
+          {/* Model cards */}
+          <div className="flex flex-col gap-3">
+            {LOCAL_MODELS.map(model => {
+              const cached = cachedModels.includes(model.id)
+              const isActive = activeLocalModel === model.id
+              const isDownloading = downloadingModel === model.id
+              const isConfirmingDelete = deleteConfirmId === model.id
+
+              return (
+                <div key={model.id} className={`bg-white rounded-2xl p-4 shadow-sm border transition-all ${
+                  isActive ? 'border-orange-300 ring-2 ring-orange-100' : 'border-stone-100'
+                }`}>
+                  {/* Card header */}
+                  <div className="flex items-start justify-between mb-1">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold text-stone-800">{model.name}</p>
+                        {model.recommended && (
+                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">
+                            {es ? 'Recomendado' : 'Recommended'}
+                          </span>
+                        )}
+                        {isActive && loadedModel === model.id && (
+                          <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">
+                            {es ? '● Activo' : '● Active'}
+                          </span>
+                        )}
+                        {isActive && loadedModel !== model.id && (
+                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">
+                            {es ? '○ Seleccionado' : '○ Selected'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-stone-400 mt-0.5">{model.provider} · {model.sizeGB} GB</p>
+                    </div>
+                    {cached && !isActive && (
+                      <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-lg shrink-0">
+                        {es ? '✓ Listo' : '✓ Ready'}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-stone-500 text-xs mb-3 leading-relaxed">
+                    {es ? model.description_es : model.description_en}
+                  </p>
+
+                  {/* Download progress bar */}
+                  {isDownloading && (
+                    <div className="mb-3">
+                      <div className="flex justify-between text-xs text-stone-500 mb-1">
+                        <span className="truncate mr-2">{downloadLabel}</span>
+                        <span className="shrink-0">{downloadProgress}%</span>
+                      </div>
+                      <div className="w-full bg-stone-100 rounded-full h-2">
+                        <div
+                          className="bg-orange-400 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${downloadProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Delete confirm */}
+                  {isConfirmingDelete && (
+                    <div className="bg-red-50 rounded-xl p-3 mb-3 border border-red-100">
+                      <p className="text-red-700 text-xs font-semibold mb-2">
+                        {es ? '¿Eliminar archivos del modelo? Tendrás que descargarlo de nuevo.' : 'Delete model files? You will need to download again.'}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleDeleteModel(model.id)}
+                          className="flex-1 py-2 bg-red-500 text-white text-xs font-semibold rounded-lg"
+                        >
+                          {es ? 'Sí, eliminar' : 'Yes, delete'}
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirmId(null)}
+                          className="flex-1 py-2 bg-stone-100 text-stone-600 text-xs font-semibold rounded-lg"
+                        >
+                          {es ? 'Cancelar' : 'Cancel'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  {!isConfirmingDelete && (
+                    <div className="flex gap-2">
+                      {!cached && !isDownloading && (
+                        <button
+                          onClick={() => handleDownload(model.id)}
+                          className="flex-1 py-2.5 bg-orange-500 text-white text-sm font-semibold rounded-xl active:scale-95 transition-all"
+                        >
+                          {es ? `Descargar · ${model.sizeGB} GB` : `Download · ${model.sizeGB} GB`}
+                        </button>
+                      )}
+                      {isDownloading && (
+                        <button disabled className="flex-1 py-2.5 bg-stone-100 text-stone-400 text-sm font-semibold rounded-xl cursor-not-allowed">
+                          {es ? 'Descargando…' : 'Downloading…'}
+                        </button>
+                      )}
+                      {cached && !isActive && !isDownloading && (
+                        <button
+                          onClick={() => handleActivate(model.id)}
+                          className="flex-1 py-2.5 bg-stone-800 text-white text-sm font-semibold rounded-xl active:scale-95 transition-all"
+                        >
+                          {es ? 'Activar' : 'Activate'}
+                        </button>
+                      )}
+                      {isActive && (
+                        <button
+                          onClick={handleDeactivate}
+                          className="flex-1 py-2.5 bg-stone-100 text-stone-600 text-sm font-semibold rounded-xl active:scale-95 transition-all"
+                        >
+                          {es ? 'Desactivar' : 'Deactivate'}
+                        </button>
+                      )}
+                      {cached && !isDownloading && (
+                        <button
+                          onClick={() => setDeleteConfirmId(model.id)}
+                          className="px-3 py-2.5 text-red-400 text-sm rounded-xl border border-red-100 active:scale-95 transition-all"
+                          title={es ? 'Eliminar archivos' : 'Delete files'}
+                        >
+                          🗑️
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </section>
 
