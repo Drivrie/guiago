@@ -133,6 +133,9 @@ export async function searchPOIsWikipedia(
       // Skip if already visited
       if (excludeLower.some(ex => geoItem.title.toLowerCase().includes(ex) || ex.includes(geoItem.title.toLowerCase()))) continue
 
+      // Skip if POI coordinates fall outside the city bounds (extra safety check on top of gsradius)
+      if (!isPOINearCity(geoItem.lat, geoItem.lon, city)) continue
+
       const page = pages[String(geoItem.pageid)]
       if (!page?.extract) continue
 
@@ -169,40 +172,60 @@ export async function searchPOIsWikipedia(
   }
 }
 
-// Search Wikipedia for a specific POI by name and return with coordinates
-// Used to geocode AI-suggested POI names
-export async function searchPOIByName(
+// Maximum distance (in degrees) a POI can be from the city centre to be accepted.
+// ~0.25° ≈ 25 km — generous enough for big cities, tight enough to reject cross-country results.
+const MAX_POI_DISTANCE_DEG = 0.25
+
+/** Returns true when Wikipedia coordinates are geographically within the city. */
+function isPOINearCity(poiLat: number, poiLon: number, city: City): boolean {
+  if (city.boundingBox) {
+    // Use bounding box + 50% padding for suburbs
+    const [minLat, maxLat, minLon, maxLon] = city.boundingBox
+    const latPad = (maxLat - minLat) * 0.5
+    const lonPad = (maxLon - minLon) * 0.5
+    return poiLat >= minLat - latPad && poiLat <= maxLat + latPad &&
+           poiLon >= minLon - lonPad && poiLon <= maxLon + lonPad
+  }
+  const dist = Math.sqrt(Math.pow(poiLat - city.lat, 2) + Math.pow(poiLon - city.lon, 2))
+  return dist < MAX_POI_DISTANCE_DEG
+}
+
+/**
+ * Try to find a POI by name in a specific Wikipedia language edition.
+ * Returns null if the article cannot be geolocated near the city.
+ * This is the core validation step that prevents cross-city contamination.
+ */
+async function trySearchPOIInWiki(
   name: string,
   city: City,
   routeType: RouteType,
-  lang: Language = 'es'
+  wikiLang: 'es' | 'en'
 ): Promise<POI | null> {
-  try {
-    const wikiLang = lang === 'es' ? 'es' : 'en'
-    const base = WIKI_API[wikiLang]
+  const base = WIKI_API[wikiLang]
 
-    // Try exact title + nearby search combined
-    const searchParams = new URLSearchParams({
-      action: 'query',
-      list: 'search',
-      srsearch: `${name} ${city.name}`,
-      srlimit: '3',
-      format: 'json',
-      origin: '*',
-    })
+  // Search with city name AND country for disambiguation
+  // e.g. "Wawel Castle Kraków Poland" instead of just "Wawel Castle Kraków"
+  const searchQuery = [name, city.name, city.country].filter(Boolean).join(' ')
+  const searchParams = new URLSearchParams({
+    action: 'query',
+    list: 'search',
+    srsearch: searchQuery,
+    srlimit: '5',
+    format: 'json',
+    origin: '*',
+  })
 
-    const searchResp = await fetch(`${base}?${searchParams}`)
-    if (!searchResp.ok) return null
-    const searchData = await searchResp.json() as { query?: { search?: Array<{ pageid: number; title: string }> } }
-    const hits = searchData.query?.search || []
-    if (hits.length === 0) return null
+  const searchResp = await fetch(`${base}?${searchParams}`)
+  if (!searchResp.ok) return null
+  const searchData = await searchResp.json() as { query?: { search?: Array<{ pageid: number; title: string }> } }
+  const hits = searchData.query?.search || []
+  if (hits.length === 0) return null
 
-    const bestHit = hits[0]
-
-    // Fetch full article with coordinates
+  // Try each hit in ranking order — accept the FIRST one with valid coordinates near the city
+  for (const hit of hits) {
     const pageParams = new URLSearchParams({
       action: 'query',
-      pageids: String(bestHit.pageid),
+      pageids: String(hit.pageid),
       prop: 'extracts|pageimages|coordinates',
       exintro: 'true',
       exchars: '800',
@@ -213,38 +236,35 @@ export async function searchPOIByName(
     })
 
     const pageResp = await fetch(`${base}?${pageParams}`)
-    if (!pageResp.ok) return null
+    if (!pageResp.ok) continue
     const pageData = await pageResp.json() as {
       query?: {
         pages?: Record<string, {
           title?: string
           extract?: string
           thumbnail?: { source?: string }
-          coordinates?: Array<{ lat: number; lon: number; primary: boolean }>
+          coordinates?: Array<{ lat: number; lon: number }>
           missing?: string
         }>
       }
     }
-    const page = pageData.query?.pages?.[String(bestHit.pageid)]
-    if (!page || page.missing !== undefined) return null
+    const page = pageData.query?.pages?.[String(hit.pageid)]
+    if (!page || page.missing !== undefined) continue
 
     const coords = page.coordinates?.[0]
-    // Use Wikipedia coords if within ~20km of city, else fall back to city coords
-    let lat = city.lat
-    let lon = city.lon
-    if (coords) {
-      const dist = Math.sqrt(Math.pow(coords.lat - city.lat, 2) + Math.pow(coords.lon - city.lon, 2))
-      if (dist < 0.15) { lat = coords.lat; lon = coords.lon }
-    }
+    if (!coords) continue // No coordinates — cannot validate location, skip
+
+    // CRITICAL: reject this article if the POI is not near the requested city
+    if (!isPOINearCity(coords.lat, coords.lon, city)) continue
 
     const extract = cleanHtml(page.extract || '')
-    if (extract.length < 30) return null
+    if (extract.length < 30) continue
 
     return {
-      id: `wiki-${bestHit.pageid}`,
+      id: `wiki-${hit.pageid}`,
       name: page.title || name,
-      lat,
-      lon,
+      lat: coords.lat,
+      lon: coords.lon,
       category: guessCategory(name, extract, routeType),
       routeType,
       description: extract,
@@ -253,6 +273,41 @@ export async function searchPOIByName(
       estimatedVisitMinutes: 20,
       tags: {},
     }
+  }
+  return null
+}
+
+/**
+ * Search Wikipedia for a specific POI by name and return with validated coordinates.
+ * Used to geocode AI-suggested POI names.
+ *
+ * Strategy:
+ * 1. Search app-language Wikipedia with name + city + country
+ * 2. If no valid near-city result, fall back to English Wikipedia
+ * 3. Reject POIs whose Wikipedia coordinates are outside the city area
+ *    (prevents Italian POIs appearing in Polish cities etc.)
+ */
+export async function searchPOIByName(
+  name: string,
+  city: City,
+  routeType: RouteType,
+  lang: Language = 'es'
+): Promise<POI | null> {
+  try {
+    const primaryLang = lang === 'es' ? 'es' : 'en'
+
+    // Try primary language first
+    const primary = await trySearchPOIInWiki(name, city, routeType, primaryLang)
+    if (primary) return primary
+
+    // Fallback to English Wikipedia (broader coverage for non-English/non-Spanish cities)
+    if (primaryLang !== 'en') {
+      const english = await trySearchPOIInWiki(name, city, routeType, 'en')
+      if (english) return english
+    }
+
+    // POI could not be verified near the city — reject to avoid cross-city contamination
+    return null
   } catch (err) {
     console.error('searchPOIByName error:', err)
     return null

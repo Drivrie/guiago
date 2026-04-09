@@ -5,6 +5,12 @@ const WIKI_API = {
   en: 'https://en.wikipedia.org/w/api.php'
 }
 
+// Wikivoyage — same MediaWiki API, travel-focused content (tips, what to see, etc.)
+const WIKIVOYAGE_API = {
+  es: 'https://es.wikivoyage.org/w/api.php',
+  en: 'https://en.wikivoyage.org/w/api.php'
+}
+
 interface WikiApiResponse {
   query?: {
     pages?: Record<string, {
@@ -87,26 +93,18 @@ export async function getFullArticle(pageid: number, lang: 'es' | 'en' = 'es'): 
   }
 }
 
-export async function getPOIDescription(name: string, lang: Language = 'es'): Promise<string> {
+/**
+ * Internal: fetch POI info from any MediaWiki-compatible API (Wikipedia, Wikivoyage…)
+ * Tries direct title lookup first, falls back to full-text search.
+ */
+async function fetchPOIFromMediaWiki(
+  name: string,
+  lang: Language,
+  apiBase: string,
+  siteBase: string
+): Promise<WikiResult | null> {
   try {
-    const result = await getPOIInfo(name, lang)
-    if (result?.extract) {
-      return result.extract
-    }
-
-    // Fallback: generate a generic description
-    return generateFallbackDescription(name, lang)
-  } catch (error) {
-    console.error('Error getting POI description:', error)
-    return generateFallbackDescription(name, lang)
-  }
-}
-
-export async function getPOIInfo(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
-  try {
-    const base = WIKI_API[lang]
-
-    // First try direct title lookup
+    // 1. Direct title lookup
     const directParams = new URLSearchParams({
       action: 'query',
       titles: name,
@@ -117,30 +115,111 @@ export async function getPOIInfo(name: string, lang: Language = 'es'): Promise<W
       format: 'json',
       origin: '*'
     })
-
-    const directResponse = await fetch(`${base}?${directParams}`)
-    if (directResponse.ok) {
-      const data: WikiApiResponse = await directResponse.json()
+    const directResp = await fetch(`${apiBase}?${directParams}`)
+    if (directResp.ok) {
+      const data: WikiApiResponse = await directResp.json()
       const pages = data?.query?.pages
       if (pages) {
         const page = Object.values(pages)[0]
-        if (page && page.pageid && !page.missing) {
-          return {
-            pageid: page.pageid,
-            title: page.title!,
-            extract: cleanWikiExtract(page.extract || ''),
-            imageUrl: page.thumbnail?.source,
-            url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title!.replace(/ /g, '_'))}`
+        if (page?.pageid && page.missing === undefined) {
+          const extract = cleanWikiExtract(page.extract || '')
+          if (extract) {
+            return {
+              pageid: page.pageid,
+              title: page.title!,
+              extract,
+              imageUrl: page.thumbnail?.source,
+              url: `${siteBase}/wiki/${encodeURIComponent(page.title!.replace(/ /g, '_'))}`
+            }
           }
         }
       }
     }
 
-    // If direct lookup fails, do a search
-    return await searchArticle(name, lang)
+    // 2. Fallback: full-text search
+    const searchParams = new URLSearchParams({
+      action: 'query', list: 'search', srsearch: name,
+      srlimit: '3', format: 'json', origin: '*'
+    })
+    const searchResp = await fetch(`${apiBase}?${searchParams}`)
+    if (!searchResp.ok) return null
+    const searchData: WikiApiResponse = await searchResp.json()
+    const results = searchData?.query?.search
+    if (!results?.length) return null
+
+    // 3. Fetch full article for first result
+    const fullParams = new URLSearchParams({
+      action: 'query', pageids: String(results[0].pageid),
+      prop: 'extracts|pageimages', exintro: 'true', exchars: '1500',
+      pithumbsize: '600', format: 'json', origin: '*'
+    })
+    const fullResp = await fetch(`${apiBase}?${fullParams}`)
+    if (!fullResp.ok) return null
+    const fullData: WikiApiResponse = await fullResp.json()
+    const fullPages = fullData?.query?.pages
+    if (!fullPages) return null
+    const fullPage = fullPages[String(results[0].pageid)]
+    if (!fullPage?.pageid) return null
+
+    return {
+      pageid: fullPage.pageid!,
+      title: fullPage.title!,
+      extract: cleanWikiExtract(fullPage.extract || ''),
+      imageUrl: fullPage.thumbnail?.source,
+      url: `${siteBase}/wiki/${encodeURIComponent(fullPage.title!.replace(/ /g, '_'))}`
+    }
+  } catch { return null }
+}
+
+export async function getPOIDescription(name: string, lang: Language = 'es'): Promise<string> {
+  try {
+    const result = await getPOIInfo(name, lang)
+    if (result?.extract) {
+      return result.extract
+    }
+    return generateFallbackDescription(name, lang)
   } catch (error) {
-    console.error('Error getting POI info:', error)
-    return null
+    console.error('Error getting POI description:', error)
+    return generateFallbackDescription(name, lang)
+  }
+}
+
+export async function getPOIInfo(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
+  return fetchPOIFromMediaWiki(
+    name, lang,
+    WIKI_API[lang],
+    `https://${lang}.wikipedia.org`
+  )
+}
+
+/**
+ * Multi-source POI lookup: queries Wikipedia + Wikivoyage in parallel.
+ * Wikipedia provides encyclopedic facts; Wikivoyage adds practical travel tips.
+ * Returns the merged best result — prefers Wikipedia as base, supplements with
+ * Wikivoyage content and fills in missing images from either source.
+ */
+export async function getPOIInfoMultiSource(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
+  const [wikiRes, voyageRes] = await Promise.allSettled([
+    fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
+    fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
+  ])
+
+  const wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
+  const voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
+
+  if (!wiki && !voyage) return null
+  if (!wiki) return voyage
+  if (!voyage) return wiki
+
+  // Merge: Wikipedia as base, Wikivoyage supplement if non-overlapping
+  const voyageExtra = voyage.extract && !wiki.extract.includes(voyage.extract.slice(0, 40))
+    ? voyage.extract
+    : ''
+
+  return {
+    ...wiki,
+    imageUrl: wiki.imageUrl || voyage.imageUrl,
+    extract: [wiki.extract, voyageExtra].filter(Boolean).join(' ').trim(),
   }
 }
 
@@ -151,10 +230,8 @@ export async function getCityDescription(cityName: string, lang: Language = 'es'
 function cleanWikiExtract(extract: string): string {
   if (!extract) return ''
 
-  // Remove HTML tags
   let cleaned = extract.replace(/<[^>]+>/g, '')
 
-  // Fix HTML entities
   cleaned = cleaned
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -165,10 +242,8 @@ function cleanWikiExtract(extract: string): string {
     .replace(/&ndash;/g, '–')
     .replace(/&mdash;/g, '—')
 
-  // Remove multiple spaces and newlines
   cleaned = cleaned.replace(/\s+/g, ' ').trim()
 
-  // Remove very short extracts
   if (cleaned.length < 50) return ''
 
   return cleaned
@@ -181,7 +256,6 @@ function generateFallbackDescription(name: string, lang: Language): string {
   return `${name} es un punto de interés destacado en esta zona. Visítalo para descubrir su historia y significado.`
 }
 
-// Generate a brief audio announcement when starting to walk to next POI
 export function generateWalkingScript(targetName: string, distanceMeters: number, lang: Language): string {
   const dist = distanceMeters > 50
     ? (distanceMeters < 1000
@@ -211,7 +285,6 @@ export function generateWalkingScript(targetName: string, distanceMeters: number
   return phrases[hash % phrases.length]
 }
 
-// Pick a phrase deterministically based on name (so same POI always gets same intro)
 function pickPhrase(arr: string[], name: string): string {
   let hash = 0
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
@@ -224,7 +297,6 @@ export function generateAudioScript(
 ): string {
   const desc = poi.description || ''
 
-  // Extract meaningful sentences (skip very short ones)
   const sentences = desc
     .split(/(?<=[.!?])\s+/)
     .map(s => s.trim())
@@ -234,6 +306,9 @@ export function generateAudioScript(
   const extraContent = sentences.slice(3, 5).join(' ')
 
   if (lang === 'en') {
+    // Always start by asking visitor to look at the image to confirm they're at the right place
+    const imageConfirm = `Look at the image on your screen — that's ${poi.name}. Make sure you're at the right spot! `
+
     const openings = [
       `Right, you've made it! In front of you... is ${poi.name}. Take a second to look around.`,
       `Here we are at ${poi.name}. Pay attention, because this place has quite a story.`,
@@ -252,14 +327,16 @@ export function generateAudioScript(
       `Spend a moment here and soak it all in. We'll move on whenever you're ready.`,
     ]
 
-    let script = pickPhrase(openings, poi.name) + ' '
+    let script = imageConfirm + pickPhrase(openings, poi.name) + ' '
     if (mainContent) script += mainContent + ' '
     if (extraContent) script += pickPhrase(connectors, poi.name + 'x') + ' ' + extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
     script += pickPhrase(closings, poi.name + 'z')
     return script
   }
 
-  // Spanish — conversational, informal, warm tone, with natural pauses via commas and ellipsis
+  // Spanish: always start by asking visitor to look at the image to confirm location
+  const imageConfirm = `Mira la imagen en pantalla, ¿ves ${poi.name}? ¡Estupendo, estás en el lugar correcto! `
+
   const openings = [
     `¡Pues ya estás aquí! Tienes delante... ${poi.name}. Tómate un momento para observarlo bien.`,
     `¡Perfecto, has llegado! Esto que ves es ${poi.name}, y... tiene mucha historia que contarte.`,
@@ -281,7 +358,7 @@ export function generateAudioScript(
     `Bueno, tómate tu tiempo aquí. Hay mucho que absorber. Cuando estés preparado, seguimos adelante.`,
   ]
 
-  let script = pickPhrase(openings, poi.name) + ' '
+  let script = imageConfirm + pickPhrase(openings, poi.name) + ' '
   if (mainContent) script += mainContent + ' '
   if (extraContent) {
     const connector = pickPhrase(connectors, poi.name + 'x')

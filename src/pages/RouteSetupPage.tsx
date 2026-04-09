@@ -103,6 +103,7 @@ export function RouteSetupPage() {
 
         const aiResult = await generateAIRoute(
           selectedCity.name,
+          selectedCity.country,        // pass country to prevent city-name ambiguity
           selectedRouteType,
           selectedDuration,
           language,
@@ -120,6 +121,16 @@ export function RouteSetupPage() {
           for (const aiPOI of aiResult.suggestedPOIs) {
             const wikiPOI = await searchPOIByName(aiPOI.name, selectedCity, selectedRouteType, language)
             if (wikiPOI) {
+              // Final safety check: reject any POI whose coordinates are clearly wrong city
+              // (searchPOIByName already does this, but double-check here as well)
+              const distDeg = Math.sqrt(
+                Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
+                Math.pow(wikiPOI.lon - selectedCity.lon, 2)
+              )
+              if (distDeg > 0.5) {
+                console.warn(`Rejected out-of-city POI: ${wikiPOI.name} (${wikiPOI.lat},${wikiPOI.lon}) for ${selectedCity.name}`)
+                continue
+              }
               resolvedPOIs.push({
                 ...wikiPOI,
                 // Enhance with AI metadata
@@ -132,7 +143,7 @@ export function RouteSetupPage() {
           if (resolvedPOIs.length >= 3) {
             pois = resolvedPOIs
           } else {
-            // AI suggestions not verifiable, fall through to Wikipedia geosearch
+            // AI suggestions not verifiable near this city, fall through to Wikipedia geosearch
             setUsingAI(false)
           }
         } else {
