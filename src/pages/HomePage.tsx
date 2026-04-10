@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
 import { useAppStore } from '../stores/appStore'
 import { getCityCoords } from '../data/cityData'
 import { hasAIKey } from '../services/ai'
 import type { City } from '../types'
+
 
 export function HomePage() {
   const { language, setLanguage, recentCities, setCity, anthropicApiKey } = useAppStore()
