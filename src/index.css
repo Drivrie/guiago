@@ -19,6 +19,7 @@ html {
   height: 100%;
   /* Prevent iOS bounce */
   overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -29,6 +30,7 @@ body {
   background: #fafaf9;
   height: 100%;
   overscroll-behavior: none;
+  color: #1f2937;
 }
 
 #root {
@@ -51,24 +53,26 @@ body {
 
 /* Safe area utilities */
 .safe-top {
-  padding-top: env(safe-area-inset-top, 0px);
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
 }
 .safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
 }
 .pt-safe-top {
-  padding-top: env(safe-area-inset-top, 0px);
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
 }
 .mt-safe-top {
-  margin-top: env(safe-area-inset-top, 0px);
+  margin-top: calc(env(safe-area-inset-top, 0px) + 1rem);
 }
 .pb-safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
 }
 
 /* Leaflet fixes */
 .leaflet-container {
   font-family: inherit;
+  height: 100%;
+  width: 100%;
 }
 
 /* Prevent text selection + remove 300ms tap delay on iOS */
@@ -76,6 +80,8 @@ button, a, [role="button"] {
   user-select: none;
   -webkit-user-select: none;
   touch-action: manipulation;
+  cursor: pointer;
+  outline: none;
 }
 
 /* Leaflet iOS touch fix */
@@ -96,4 +102,46 @@ button, a, [role="button"] {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Button styles */
+.btn {
+  @apply px-4 py-2 rounded-lg font-medium transition-colors;
+}
+
+.btn-primary {
+  @apply bg-amber-600 text-white hover:bg-amber-700 active:bg-amber-800;
+}
+
+.btn-secondary {
+  @apply bg-gray-200 text-gray-800 hover:bg-gray-300 active:bg-gray-400;
+}
+
+/* Card styles */
+.card {
+  @apply bg-white rounded-xl shadow-sm p-4 border border-gray-100;
+}
+
+/* Input styles */
+.input {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500;
+}
+
+/* Animation */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Chatbot container */
+.chatbot-container {
+  @apply fixed bottom-4 right-4 w-16 h-16 bg-amber-600 rounded-full flex items-center justify-center shadow-lg z-50;
+}
+
+.chatbot-open {
+  @apply w-64 h-96 rounded-lg p-4 bg-white shadow-xl border border-gray-200;
 }
