@@ -41,30 +41,41 @@ export function HomePage() {
   const [locationGranted, setLocationGranted] = useState(false)
   const [userCoords, setUserCoords] = useState<[number, number] | null>(null)
 
-  // Effect 1: request GPS once on mount, with a safety timer for silent blocks
+  // Effect 1: use location only if permission was ALREADY granted — never prompt here.
+  // Location prompts belong exclusively to TodayPage (the "What to visit today?" flow).
   useEffect(() => {
     if (!navigator.geolocation) return
 
-    setSearchingLocation(true)
+    const getPositionSilently = () => {
+      setSearchingLocation(true)
+      const safetyTimer = setTimeout(() => setSearchingLocation(false), 9000)
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          clearTimeout(safetyTimer)
+          setUserCoords([pos.coords.latitude, pos.coords.longitude])
+          setLocationGranted(true)
+          setSearchingLocation(false)
+        },
+        () => {
+          clearTimeout(safetyTimer)
+          setSearchingLocation(false)
+        },
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+      )
+      return () => clearTimeout(safetyTimer)
+    }
 
-    // Safety net: some mobile browsers block GPS silently without calling the error cb
-    const safetyTimer = setTimeout(() => setSearchingLocation(false), 9000)
-
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        clearTimeout(safetyTimer)
-        setUserCoords([pos.coords.latitude, pos.coords.longitude])
-        setLocationGranted(true)
-        setSearchingLocation(false)
-      },
-      () => {
-        clearTimeout(safetyTimer)
-        setSearchingLocation(false)
-      },
-      { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
-    )
-
-    return () => clearTimeout(safetyTimer)
+    if ('permissions' in navigator) {
+      // Check without prompting; only proceed if already granted
+      navigator.permissions
+        .query({ name: 'geolocation' as PermissionName })
+        .then(status => {
+          if (status.state === 'granted') getPositionSilently()
+          // 'prompt' or 'denied' → just show fallback cities, no request made
+        })
+        .catch(() => { /* Permissions API unavailable — skip location on homepage */ })
+    }
+    // If Permissions API is not available, skip location entirely on homepage
   }, [])
 
   // Effect 2: fetch nearby cities when coords arrive (re-fetches on language change too)
