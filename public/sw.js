@@ -1,12 +1,12 @@
 // GuiAgo Service Worker
-const CACHE_NAME = 'guiago-v1'
+const CACHE_NAME = 'guiago-v2'
 const TILE_CACHE = 'osm-tiles-v1'
-const API_CACHE = 'api-v1'
+const API_CACHE = 'api-v2'
 
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
+  '/guiago/',
+  '/guiago/index.html',
+  '/guiago/manifest.json',
 ]
 
 self.addEventListener('install', (event) => {
@@ -28,7 +28,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
 
-  // OSM tiles - cache first
+  // OSM tiles - cache first (tiles rarely change)
   if (url.hostname.includes('tile.openstreetmap.org')) {
     event.respondWith(
       caches.open(TILE_CACHE).then(cache =>
@@ -44,8 +44,12 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Wikipedia/Nominatim - network first with cache fallback
-  if (url.hostname.includes('wikipedia.org') || url.hostname.includes('nominatim.openstreetmap.org')) {
+  // Wikipedia/Nominatim/Overpass - network first with cache fallback
+  if (
+    url.hostname.includes('wikipedia.org') ||
+    url.hostname.includes('nominatim.openstreetmap.org') ||
+    url.hostname.includes('overpass-api.de')
+  ) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
@@ -60,18 +64,34 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // App shell - stale while revalidate
-  if (event.request.mode === 'navigate' || event.request.destination === 'script' || event.request.destination === 'style') {
+  // index.html - always network first so users get the latest app version
+  if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match(event.request).then(cached => {
-        const networkFetch = fetch(event.request).then(response => {
+      fetch(event.request)
+        .then(response => {
           if (response.ok) {
             caches.open(CACHE_NAME).then(cache => cache.put(event.request, response.clone()))
           }
           return response
         })
-        return cached || networkFetch
+        .catch(() => caches.match(event.request))
+    )
+    return
+  }
+
+  // JS/CSS assets have hashed filenames - cache first (they never change once deployed)
+  if (event.request.destination === 'script' || event.request.destination === 'style') {
+    event.respondWith(
+      caches.match(event.request).then(cached => {
+        if (cached) return cached
+        return fetch(event.request).then(response => {
+          if (response.ok) {
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, response.clone()))
+          }
+          return response
+        })
       })
     )
   }
 })
+
