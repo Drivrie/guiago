@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
 import { useAppStore } from '../stores/appStore'
@@ -37,38 +37,46 @@ export function HomePage() {
     }
   }, [setOffline])
 
-  const [locationState, setLocationState] = useState<LocationState>('idle')
+  // 'loading' = waiting for GPS answer, 'found' = got coords, 'denied'/'error' = no location
+  const [locationState, setLocationState] = useState<LocationState>('loading')
   const [nearbyCities, setNearbyCities] = useState<(City & { distanceKm?: number })[] | null>(null)
+  const [citiesLoading, setCitiesLoading] = useState(false)
   const [userCoords, setUserCoords] = useState<[number, number] | null>(null)
 
-  const fetchNearbyCities = useCallback(async (lat: number, lon: number) => {
-    try {
-      const cities = await getNearbyCities(lat, lon, language)
-      setNearbyCities(cities)
-    } catch {
-      setNearbyCities(null)
-    }
-  }, [language])
-
+  // Effect 1: request GPS once on mount (no deps → runs exactly once)
   useEffect(() => {
     if (!navigator.geolocation) {
       setLocationState('error')
       return
     }
-    setLocationState('loading')
     navigator.geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude } = pos.coords
-        setUserCoords([latitude, longitude])
+        setUserCoords([pos.coords.latitude, pos.coords.longitude])
         setLocationState('found')
-        fetchNearbyCities(latitude, longitude)
       },
       () => {
         setLocationState('denied')
       },
       { enableHighAccuracy: false, timeout: 7000, maximumAge: 300000 }
     )
-  }, [fetchNearbyCities])
+  }, [])
+
+  // Effect 2: fetch nearby cities when we have coords (re-fetches on language change too)
+  useEffect(() => {
+    if (!userCoords) return
+    const [lat, lon] = userCoords
+    setCitiesLoading(true)
+    getNearbyCities(lat, lon, language)
+      .then(cities => {
+        setNearbyCities(cities.length > 0 ? cities : [])
+      })
+      .catch(() => {
+        setNearbyCities([])
+      })
+      .finally(() => {
+        setCitiesLoading(false)
+      })
+  }, [userCoords, language])
 
   function handleRecentCity(city: City) {
     setCity(city)
@@ -102,15 +110,16 @@ export function HomePage() {
     return '🏙️'
   }
 
-  const locationLoading = locationState === 'loading' || (locationState === 'found' && nearbyCities === null)
-  const showNearby = locationState === 'found' && nearbyCities !== null && nearbyCities.length > 0
-  const showFallback = !locationLoading && !showNearby
+  // Show skeleton while waiting for GPS reply OR while Overpass is fetching
+  const locationLoading = locationState === 'loading' || citiesLoading
+  // Show nearby only when we have actual results
+  const showNearby = !locationLoading && nearbyCities !== null && nearbyCities.length > 0
+  // Fallback always shows when not loading and no nearby results
+  const displayCities = showNearby ? nearbyCities! : FALLBACK_CITIES
 
   const sectionTitle = showNearby
     ? (language === 'es' ? 'Ciudades cercanas a ti' : 'Cities near you')
     : (language === 'es' ? 'Destinos populares en el mundo' : 'Popular destinations worldwide')
-
-  const displayCities = showNearby ? nearbyCities : FALLBACK_CITIES
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-orange-50 via-amber-50 to-white safe-top">
