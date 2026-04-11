@@ -62,6 +62,7 @@ export function TodayPage() {
   const [phase, setPhase] = useState<'locating' | 'selecting' | 'error'>('locating')
   const [location, setLocation] = useState<DetectedLocation | null>(null)
   const [geoError, setGeoError] = useState<string | null>(null)
+  const [permissionDenied, setPermissionDenied] = useState(false)
   const [avoidVisited, setAvoidVisited] = useState(true)
   const [userCoords, setUserCoords] = useState<[number, number] | null>(null)
 
@@ -83,34 +84,57 @@ export function TodayPage() {
       return
     }
 
-    navigator.geolocation.getCurrentPosition(
-      async pos => {
-        setUserCoords([pos.coords.latitude, pos.coords.longitude])
-        // Store GPS location globally so ActiveRoutePage can use it immediately
-        setUserLocation([pos.coords.latitude, pos.coords.longitude])
-        const result = await reverseGeocode(pos.coords.latitude, pos.coords.longitude)
-        if (result) {
-          setLocation(result)
-          setPhase('selecting')
-        } else {
-          setGeoError(
-            es
-              ? 'No pudimos detectar tu ciudad. Prueba a buscarla manualmente.'
-              : 'Could not detect your city. Try searching manually.'
-          )
+    const requestLocation = () => {
+      navigator.geolocation.getCurrentPosition(
+        async pos => {
+          setUserCoords([pos.coords.latitude, pos.coords.longitude])
+          // Store GPS location globally so ActiveRoutePage can use it immediately
+          setUserLocation([pos.coords.latitude, pos.coords.longitude])
+          const result = await reverseGeocode(pos.coords.latitude, pos.coords.longitude)
+          if (result) {
+            setLocation(result)
+            setPhase('selecting')
+          } else {
+            setGeoError(
+              es
+                ? 'No pudimos detectar tu ciudad. Prueba a buscarla manualmente.'
+                : 'Could not detect your city. Try searching manually.'
+            )
+            setPhase('error')
+          }
+        },
+        err => {
+          if (err.code === 1) {
+            setPermissionDenied(true)
+            setGeoError(es ? 'El permiso de ubicación está bloqueado.' : 'Location permission is blocked.')
+          } else {
+            setGeoError(es ? 'No pudimos obtener tu ubicación. Verifica el GPS.' : 'Could not get your location. Check your GPS.')
+          }
           setPhase('error')
-        }
-      },
-      err => {
-        const msg =
-          err.code === 1
-            ? (es ? 'Permiso de ubicación denegado. Actívalo en los ajustes.' : 'Location permission denied. Enable it in settings.')
-            : (es ? 'No pudimos obtener tu ubicación. Verifica el GPS.' : 'Could not get your location. Check your GPS.')
-        setGeoError(msg)
-        setPhase('error')
-      },
-      { enableHighAccuracy: true, timeout: 6000 }
-    )
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      )
+    }
+
+    // Check permission state first — if already denied, skip the (silent) request
+    // and show instructions immediately. If granted, request without a prompt.
+    // If 'prompt', proceed normally so the browser shows the permission dialog.
+    if ('permissions' in navigator) {
+      navigator.permissions
+        .query({ name: 'geolocation' as PermissionName })
+        .then(status => {
+          if (status.state === 'denied') {
+            setPermissionDenied(true)
+            setGeoError(es ? 'El permiso de ubicación está bloqueado.' : 'Location permission is blocked.')
+            setPhase('error')
+          } else {
+            requestLocation()
+          }
+        })
+        .catch(() => requestLocation())
+    } else {
+      requestLocation()
+    }
   }, [])
 
   async function searchPOI(query: string) {
@@ -212,18 +236,49 @@ export function TodayPage() {
 
       {/* Error phase */}
       {phase === 'error' && (
-        <div className="px-5 py-8 flex flex-col items-center gap-6">
-          <div className="text-5xl">📍</div>
+        <div className="px-5 py-8 flex flex-col items-center gap-5">
+          <div className="text-5xl">{permissionDenied ? '🔒' : '📍'}</div>
           <div className="text-center">
-            <p className="text-white font-bold text-lg mb-2">{es ? 'No pudimos localizarte' : 'Could not locate you'}</p>
+            <p className="text-white font-bold text-lg mb-2">
+              {permissionDenied
+                ? (es ? 'Ubicación bloqueada' : 'Location blocked')
+                : (es ? 'No pudimos localizarte' : 'Could not locate you')}
+            </p>
             <p className="text-blue-300 text-sm">{geoError}</p>
           </div>
+
+          {permissionDenied && (
+            <div className="w-full max-w-sm bg-white/10 rounded-2xl p-4 border border-white/20">
+              <p className="text-white font-semibold text-sm mb-3">
+                {es ? 'Cómo activar la ubicación:' : 'How to enable location:'}
+              </p>
+              <ol className="space-y-2.5 text-sm text-white/80">
+                <li className="flex gap-2">
+                  <span className="text-orange-400 font-bold flex-shrink-0">1.</span>
+                  <span>{es ? 'Toca el ícono 🔒 o ⓘ en la barra de direcciones del navegador' : 'Tap the 🔒 or ⓘ icon in the browser address bar'}</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-orange-400 font-bold flex-shrink-0">2.</span>
+                  <span>{es ? 'Selecciona "Permisos del sitio" o "Configuración del sitio"' : 'Select "Site permissions" or "Site settings"'}</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-orange-400 font-bold flex-shrink-0">3.</span>
+                  <span>{es ? 'Toca "Ubicación" y cámbialo a "Permitir"' : 'Tap "Location" and change it to "Allow"'}</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-orange-400 font-bold flex-shrink-0">4.</span>
+                  <span>{es ? 'Vuelve aquí y pulsa "Intentar de nuevo"' : 'Come back here and tap "Try again"'}</span>
+                </li>
+              </ol>
+            </div>
+          )}
+
           <div className="flex flex-col gap-3 w-full max-w-sm">
             <Button fullWidth onClick={() => navigate('/')}>
               {es ? '🔍 Buscar ciudad manualmente' : '🔍 Search city manually'}
             </Button>
             <button
-              onClick={() => { setPhase('locating'); window.location.reload() }}
+              onClick={() => { setPermissionDenied(false); setPhase('locating'); window.location.reload() }}
               className="w-full py-3 text-blue-300 text-sm"
             >
               {es ? 'Intentar de nuevo' : 'Try again'}
