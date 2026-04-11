@@ -1,7 +1,7 @@
 // GuiAgo Service Worker
-const CACHE_NAME = 'guiago-v2'
+const CACHE_NAME = 'guiago-v3'
 const TILE_CACHE = 'osm-tiles-v1'
-const API_CACHE = 'api-v2'
+const API_CACHE = 'api-v3'
 
 const STATIC_ASSETS = [
   '/guiago/',
