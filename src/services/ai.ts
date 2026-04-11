@@ -406,6 +406,22 @@ STRUCTURE:
   }
 }
 
+/**
+ * General-purpose tourism assistant chat — used by the GuiAgo chatbot.
+ * Routes through the same local → Mistral → Pollinations priority chain.
+ */
+export async function chatWithAssistant(
+  userMessage: string,
+  lang: Language,
+  userKey: string
+): Promise<string> {
+  const system =
+    lang === 'es'
+      ? 'Eres un asistente turístico experto de GuiAgo. Ayudas con información sobre lugares turísticos, rutas, cultura local, consejos prácticos y todo lo relacionado con viajes. Respuestas concisas, amigables y útiles en español. Sin formato markdown.'
+      : "You are GuiAgo's expert tourism assistant. You help with tourist spots, routes, local culture, practical tips and everything travel-related. Concise, friendly, useful answers in English. No markdown formatting."
+  return callAI(system, userMessage, getAIKey(userKey), 400)
+}
+
 /** Validate a user-provided Mistral API key */
 export async function validateApiKey(apiKey: string): Promise<boolean> {
   const key = apiKey?.trim()
