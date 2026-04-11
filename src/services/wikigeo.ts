@@ -7,7 +7,7 @@ const WIKI_API = {
 
 // Keywords per route type for scoring Wikipedia articles
 const ROUTE_KEYWORDS: Record<RouteType, RegExp> = {
-  imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|principal|basílica|castillo|torre|plaza mayor|famoso|turístico/i,
+  imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|principal|basílica|castillo|torre|plaza mayor|famoso|turístico|cathedral|palace|castle|museum|monument|heritage|iconic|famous|landmark|basilica|tower|main square|historic|plaza|square|bridge|puente|gate|puerta|wall|muralla|temple|templo|market|mercado/i,
   secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local|vecinos|cotidiano|alternativo|auténtico|escondido|peculiar|mercadillo|taberna|pasaje|patio|calleja/i,
   monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|real|alcazaba|mezquita|sinagoga|alhambra|fortaleza/i,
   historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|fusilamiento|memorial|asesinato|tragedia|holocausto/i,
@@ -95,8 +95,8 @@ export async function searchPOIsWikipedia(
       action: 'query',
       list: 'geosearch',
       gscoord: `${city.lat}|${city.lon}`,
-      gsradius: '3000',
-      gslimit: '50',
+      gsradius: '6000',  // 6km — covers outer attractions and large cities
+      gslimit: '100',    // More candidates → better scoring pool
       format: 'json',
       origin: '*',
     })
