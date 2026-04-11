@@ -200,8 +200,9 @@ export async function generateAIRoute(
   userKey: string,
   excludeNames: string[] = []
 ): Promise<AIRouteResult | null> {
-  // More POIs: 1 per 15 min, min 5, max 15
-  const maxPOIs = Math.max(5, Math.min(15, Math.floor(durationMinutes / 15)))
+  // Target: ~1 POI per 12 min of visit time, min 6, max 14
+  // 60 min → 5, 120 min → 10, 180 min → 13, 240 min → 14
+  const maxPOIs = Math.max(6, Math.min(14, Math.round(durationMinutes / 12)))
   const typeDesc = ROUTE_TYPE_DESC[routeType][lang]
   // Always use "CityName, Country" to avoid ambiguity (e.g. Roma Poland vs Roma Italy)
   const locationDesc = countryName ? `${cityName}, ${countryName}` : cityName
@@ -273,7 +274,7 @@ Exact JSON (no text outside JSON):
 }`
 
   try {
-    const text = await callAI(system, user, getAIKey(userKey), 1800)
+    const text = await callAI(system, user, getAIKey(userKey), 2800)
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
     const result = JSON.parse(jsonMatch[0]) as AIRouteResult

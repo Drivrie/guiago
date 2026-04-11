@@ -83,7 +83,9 @@ export function RouteSetupPage() {
     setAiRouteStory(null)
     setUsingAI(false)
 
-    const maxPOIs = Math.max(3, Math.min(12, Math.floor(selectedDuration / 20)))
+    // Target POI count: ~1 stop per 12 min, min 6, max 14
+    // 1h→5, 2h→10, 3h→13, 4h→14, full-day→14
+    const maxPOIs = Math.max(6, Math.min(14, Math.round(selectedDuration / 12)))
     const visitedNames = avoidVisited ? getVisitedPOINames(selectedCity.id) : []
     const aiAvailable = hasAIKey(anthropicApiKey)
     const aiKey = getAIKey(anthropicApiKey)
@@ -95,7 +97,7 @@ export function RouteSetupPage() {
       let usedRouteType = selectedRouteType
 
       // ============================================================
-      // AI-ENHANCED PATH: Mistral generates curated POI list
+      // STEP 1 — AI path: ask AI for curated POI suggestions
       // ============================================================
       if (aiAvailable) {
         setLoading(true, language === 'es' ? '🤖 Creando ruta con IA...' : '🤖 Creating AI-powered route...')
@@ -103,7 +105,7 @@ export function RouteSetupPage() {
 
         const aiResult = await generateAIRoute(
           selectedCity.name,
-          selectedCity.country,        // pass country to prevent city-name ambiguity
+          selectedCity.country,
           selectedRouteType,
           selectedDuration,
           language,
@@ -114,15 +116,13 @@ export function RouteSetupPage() {
         if (aiResult && aiResult.suggestedPOIs.length > 0) {
           setAiRouteStory(aiResult.routeStory)
 
-          // Resolve each AI-suggested POI to real Wikipedia data + coordinates
+          // Resolve each AI-suggested POI to real Wikipedia coordinates
           setLoading(true, language === 'es' ? '🔍 Verificando lugares en Wikipedia...' : '🔍 Verifying places on Wikipedia...')
 
           const resolvedPOIs: POI[] = []
           for (const aiPOI of aiResult.suggestedPOIs) {
             const wikiPOI = await searchPOIByName(aiPOI.name, selectedCity, selectedRouteType, language)
             if (wikiPOI) {
-              // Final safety check: reject any POI whose coordinates are clearly wrong city
-              // (searchPOIByName already does this, but double-check here as well)
               const distDeg = Math.sqrt(
                 Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
                 Math.pow(wikiPOI.lon - selectedCity.lon, 2)
@@ -133,17 +133,16 @@ export function RouteSetupPage() {
               }
               resolvedPOIs.push({
                 ...wikiPOI,
-                // Enhance with AI metadata
                 shortDescription: aiPOI.reason,
                 tags: { ...(wikiPOI.tags || {}), insiderTip: aiPOI.insiderTip || '' },
               })
             }
           }
 
-          if (resolvedPOIs.length >= 3) {
+          if (resolvedPOIs.length > 0) {
             pois = resolvedPOIs
-          } else {
-            // AI suggestions not verifiable near this city, fall through to Wikipedia geosearch
+          }
+          if (resolvedPOIs.length < 3) {
             setUsingAI(false)
           }
         } else {
@@ -152,7 +151,42 @@ export function RouteSetupPage() {
       }
 
       // ============================================================
-      // WIKIPEDIA GEOSEARCH PATH (fallback or no API key)
+      // STEP 2 — Wikipedia geosearch: always supplement to reach maxPOIs
+      // AI-resolved POIs get priority; Wikipedia fills remaining slots
+      // ============================================================
+      if (pois.length < maxPOIs) {
+        setLoading(true, language === 'es' ? 'Buscando más lugares en Wikipedia...' : 'Finding more places on Wikipedia...')
+        const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
+        const wikiResults = await searchPOIsWikipedia(selectedCity!, selectedRouteType, maxPOIs, language, visitedNames)
+        for (const wp of wikiResults) {
+          if (pois.length >= maxPOIs) break
+          if (!existingNames.has(wp.name.toLowerCase()) &&
+              !visitedNames.some(v => v.toLowerCase() === wp.name.toLowerCase())) {
+            existingNames.add(wp.name.toLowerCase())
+            pois.push(wp)
+          }
+        }
+      }
+
+      // ============================================================
+      // STEP 3 — Overpass fallback: fill remaining slots from OSM
+      // ============================================================
+      if (pois.length < maxPOIs) {
+        setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
+        const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
+        const overpassPOIs = await getPOIsByCity(selectedCity!, selectedRouteType, selectedDuration!)
+        for (const op of overpassPOIs) {
+          if (pois.length >= maxPOIs) break
+          if (!existingNames.has(op.name.toLowerCase()) &&
+              !visitedNames.some(v => v.toLowerCase() === op.name.toLowerCase())) {
+            existingNames.add(op.name.toLowerCase())
+            pois.push(op)
+          }
+        }
+      }
+
+      // ============================================================
+      // STEP 4 — Fallback route types (last resort when < 3 POIs)
       // ============================================================
       if (pois.length < 3) {
         async function searchForType(rType: RouteType): Promise<POI[]> {
@@ -173,26 +207,19 @@ export function RouteSetupPage() {
           return results
         }
 
-        let found = await searchForType(selectedRouteType)
-
-        // Try fallback types if still not enough
-        if (found.length < 3) {
-          for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
-            const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
-            setLoading(true, language === 'es'
-              ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
-              : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
-            const fbPOIs = await searchForType(fbType)
-            if (fbPOIs.length >= 3) {
-              found = fbPOIs
-              usedRouteType = fbType
-              setFallbackInfo({ requested: selectedRouteType, found: fbType })
-              break
-            }
+        for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
+          const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
+          setLoading(true, language === 'es'
+            ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
+            : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
+          const fbPOIs = await searchForType(fbType)
+          if (fbPOIs.length >= 3) {
+            pois = fbPOIs
+            usedRouteType = fbType
+            setFallbackInfo({ requested: selectedRouteType, found: fbType })
+            break
           }
         }
-
-        pois = found
       }
 
       if (pois.length === 0) {
@@ -426,8 +453,8 @@ export function RouteSetupPage() {
                 </p>
                 <p className="text-sm text-stone-500">
                   {language === 'es'
-                    ? `${selectedDuration === 480 ? 'Día completo' : selectedDuration === 240 ? 'Medio día' : `${selectedDuration / 60}h`} · ~${Math.floor(selectedDuration / 20)} paradas`
-                    : `${selectedDuration === 480 ? 'Full day' : selectedDuration === 240 ? 'Half day' : `${selectedDuration / 60}h`} · ~${Math.floor(selectedDuration / 20)} stops`}
+                    ? `${selectedDuration === 480 ? 'Día completo' : selectedDuration === 240 ? 'Medio día' : `${selectedDuration / 60}h`} · ~${Math.max(6, Math.min(14, Math.round(selectedDuration / 12)))} paradas`
+                    : `${selectedDuration === 480 ? 'Full day' : selectedDuration === 240 ? 'Half day' : `${selectedDuration / 60}h`} · ~${Math.max(6, Math.min(14, Math.round(selectedDuration / 12)))} stops`}
                 </p>
               </div>
             </div>
