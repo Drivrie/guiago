@@ -45,6 +45,22 @@ function scoreArticle(title: string, extract: string, routeType: RouteType): num
   return (text.match(re) || []).length
 }
 
+/** Realistic visit times for a walking-tour stop (not a deep interior visit). */
+function guessVisitMinutes(title: string, extract: string): number {
+  const t = `${title} ${extract.slice(0, 200)}`.toLowerCase()
+  if (/museo|museum/.test(t)) return 20
+  if (/catedral|basílica|cathedral|basilica/.test(t)) return 15
+  if (/palacio|palace|alcázar|alhambra|alcazaba/.test(t)) return 18
+  if (/castillo|castle|fortaleza|muralla/.test(t)) return 15
+  if (/parque|jardín|park|garden/.test(t)) return 12
+  if (/mercado|market/.test(t)) return 15
+  if (/plaza|square|piazza/.test(t)) return 8
+  if (/puente|bridge|pont/.test(t)) return 8
+  if (/iglesia|church|convento|monasterio|chapel/.test(t)) return 12
+  if (/torre|tower/.test(t)) return 10
+  return 12
+}
+
 function guessCategory(title: string, extract: string, routeType: RouteType): string {
   const t = `${title} ${extract.slice(0, 200)}`.toLowerCase()
   if (/catedral|basílica/.test(t)) return 'catedral'
@@ -83,7 +99,8 @@ export async function searchPOIsWikipedia(
   routeType: RouteType,
   maxPOIs: number,
   lang: Language = 'es',
-  excludeNames: string[] = []
+  excludeNames: string[] = [],
+  radiusMeters: number = 4000
 ): Promise<POI[]> {
   try {
     const wikiLang = lang === 'es' ? 'es' : 'en'
@@ -95,7 +112,7 @@ export async function searchPOIsWikipedia(
       action: 'query',
       list: 'geosearch',
       gscoord: `${city.lat}|${city.lon}`,
-      gsradius: '6000',  // 6km — covers outer attractions and large cities
+      gsradius: String(Math.min(10000, Math.max(1000, radiusMeters))),
       gslimit: '100',    // More candidates → better scoring pool
       format: 'json',
       origin: '*',
@@ -154,7 +171,7 @@ export async function searchPOIsWikipedia(
         description: extract,
         imageUrl: (page as { thumbnail?: { source?: string } }).thumbnail?.source,
         wikipediaTitle: geoItem.title,
-        estimatedVisitMinutes: 20,
+        estimatedVisitMinutes: guessVisitMinutes(geoItem.title, extract),
         tags: {},
         _score: score,
       })
@@ -270,7 +287,7 @@ async function trySearchPOIInWiki(
       description: extract,
       imageUrl: page.thumbnail?.source,
       wikipediaTitle: page.title,
-      estimatedVisitMinutes: 20,
+      estimatedVisitMinutes: guessVisitMinutes(page.title || name, extract),
       tags: {},
     }
   }

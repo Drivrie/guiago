@@ -12,8 +12,8 @@ const POIS_BY_DURATION: Record<number, number> = {
 }
 
 // Overpass tag queries per route type
-function buildOverpassQuery(city: City, routeType: RouteType): string {
-  const radius = 3000 // 3km radius from city center
+function buildOverpassQuery(city: City, routeType: RouteType, radiusMeters: number = 3000): string {
+  const radius = radiusMeters
   const lat = city.lat
   const lon = city.lon
 
@@ -212,9 +212,9 @@ function estimateVisitTime(routeType: RouteType, category: string): number {
   return time
 }
 
-export async function getPOIsByCity(city: City, routeType: RouteType, maxDuration: number = 180): Promise<POI[]> {
+export async function getPOIsByCity(city: City, routeType: RouteType, maxDuration: number = 180, radiusMeters: number = 3000): Promise<POI[]> {
   try {
-    const query = buildOverpassQuery(city, routeType)
+    const query = buildOverpassQuery(city, routeType, radiusMeters)
 
     const response = await fetch(OVERPASS_BASE, {
       method: 'POST',
