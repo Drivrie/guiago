@@ -10,8 +10,18 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, fitRouteToTimeBudget } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
+
+type TravelMode = 'walk' | 'transit'
+
+/** Search radius in metres, scaled to how far you can realistically travel. */
+function searchRadius(durationMin: number, mode: TravelMode): number {
+  if (mode === 'transit') return 8000
+  // Walking: ~84 m/min × duration / 4 (you're not walking continuously)
+  return Math.min(5000, Math.max(1500, Math.round(durationMin * 22)))
+  // 60→1500, 120→2640, 180→3960, 240→5000
+}
 import { ROUTE_TYPE_INFO } from '../types'
 
 // Fallback order when requested type yields no results
@@ -50,6 +60,7 @@ export function RouteSetupPage() {
   const [fallbackInfo, setFallbackInfo] = useState<{ requested: RouteType; found: RouteType } | null>(null)
   const [aiRouteStory, setAiRouteStory] = useState<string | null>(null)
   const [usingAI, setUsingAI] = useState(false)
+  const [travelMode, setTravelMode] = useState<TravelMode>('walk')
   // Inherit avoidVisited from TodayPage nav state if present, default true
   const [avoidVisited, setAvoidVisited] = useState<boolean>(
     (routerLocation.state as { avoidVisited?: boolean } | null)?.avoidVisited ?? true
@@ -83,9 +94,10 @@ export function RouteSetupPage() {
     setAiRouteStory(null)
     setUsingAI(false)
 
-    // Target POI count: ~1 stop per 12 min, min 6, max 14
-    // 1h→5, 2h→10, 3h→13, 4h→14, full-day→14
-    const maxPOIs = Math.max(6, Math.min(14, Math.round(selectedDuration / 12)))
+    // Collect more candidates than needed — fitting trims to what actually fits in time+distance.
+    // Target: at least 20 candidates so the nearest-neighbor + time-budget algorithm has choices.
+    const candidateTarget = 20
+    const radius = searchRadius(selectedDuration, travelMode)
     const visitedNames = avoidVisited ? getVisitedPOINames(selectedCity.id) : []
     const aiAvailable = hasAIKey(anthropicApiKey)
     const aiKey = getAIKey(anthropicApiKey)
@@ -151,15 +163,19 @@ export function RouteSetupPage() {
       }
 
       // ============================================================
-      // STEP 2 — Wikipedia geosearch: always supplement to reach maxPOIs
-      // AI-resolved POIs get priority; Wikipedia fills remaining slots
+      // STEP 2 — Wikipedia geosearch: always supplement candidate pool
+      // AI-resolved POIs get priority; Wikipedia fills remaining slots.
+      // We always try to collect candidateTarget total to give the
+      // time-budget fitting enough POIs to choose from.
       // ============================================================
-      if (pois.length < maxPOIs) {
+      if (pois.length < candidateTarget) {
         setLoading(true, language === 'es' ? 'Buscando más lugares en Wikipedia...' : 'Finding more places on Wikipedia...')
         const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
-        const wikiResults = await searchPOIsWikipedia(selectedCity!, selectedRouteType, maxPOIs, language, visitedNames)
+        const wikiResults = await searchPOIsWikipedia(
+          selectedCity!, selectedRouteType, candidateTarget, language, visitedNames, radius
+        )
         for (const wp of wikiResults) {
-          if (pois.length >= maxPOIs) break
+          if (pois.length >= candidateTarget) break
           if (!existingNames.has(wp.name.toLowerCase()) &&
               !visitedNames.some(v => v.toLowerCase() === wp.name.toLowerCase())) {
             existingNames.add(wp.name.toLowerCase())
@@ -171,12 +187,12 @@ export function RouteSetupPage() {
       // ============================================================
       // STEP 3 — Overpass fallback: fill remaining slots from OSM
       // ============================================================
-      if (pois.length < maxPOIs) {
+      if (pois.length < candidateTarget) {
         setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
         const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
-        const overpassPOIs = await getPOIsByCity(selectedCity!, selectedRouteType, selectedDuration!)
+        const overpassPOIs = await getPOIsByCity(selectedCity!, selectedRouteType, selectedDuration!, radius)
         for (const op of overpassPOIs) {
-          if (pois.length >= maxPOIs) break
+          if (pois.length >= candidateTarget) break
           if (!existingNames.has(op.name.toLowerCase()) &&
               !visitedNames.some(v => v.toLowerCase() === op.name.toLowerCase())) {
             existingNames.add(op.name.toLowerCase())
@@ -191,10 +207,10 @@ export function RouteSetupPage() {
       if (pois.length < 3) {
         async function searchForType(rType: RouteType): Promise<POI[]> {
           setLoading(true, language === 'es' ? `Buscando en Wikipedia...` : 'Searching Wikipedia...')
-          let results = await searchPOIsWikipedia(selectedCity!, rType, maxPOIs, language, visitedNames)
+          let results = await searchPOIsWikipedia(selectedCity!, rType, candidateTarget, language, visitedNames, radius)
           if (results.length < 3) {
             setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
-            const overpassPOIs = await getPOIsByCity(selectedCity!, rType, selectedDuration!)
+            const overpassPOIs = await getPOIsByCity(selectedCity!, rType, selectedDuration!, radius)
             const existingNames = new Set(results.map(p => p.name.toLowerCase()))
             for (const op of overpassPOIs) {
               if (!existingNames.has(op.name.toLowerCase()) &&
@@ -231,8 +247,15 @@ export function RouteSetupPage() {
         return
       }
 
-      // Order POIs for optimal walking path
+      // Order POIs for optimal walking path (nearest-neighbor from city centre)
       pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
+
+      // Trim the ordered list to what actually fits in the time budget.
+      // Walking mode only — transit users accept longer travel times.
+      if (travelMode === 'walk') {
+        pois = fitRouteToTimeBudget(pois, selectedDuration)
+      }
+
       setPOIs(pois)
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
@@ -429,6 +452,58 @@ export function RouteSetupPage() {
           <RouteTypeSelector selected={selectedRouteType} onSelect={type => { setRouteType(type) }} />
         </div>
 
+        {/* Travel mode selector */}
+        {selectedRouteType && (
+          <div className="mb-6">
+            <h2 className="text-xl font-bold text-stone-800 mb-1">
+              {language === 'es' ? '¿Cómo te vas a mover?' : 'How will you travel?'}
+            </h2>
+            <p className="text-stone-400 text-sm mb-4">
+              {language === 'es'
+                ? 'Ajusta la ruta a tu forma de desplazarte'
+                : 'Adapt the route to how you get around'}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                {
+                  mode: 'walk' as TravelMode,
+                  icon: '🚶',
+                  label_es: 'A pie',
+                  label_en: 'Walking',
+                  sub_es: 'Ruta compacta en el centro',
+                  sub_en: 'Compact route in the centre',
+                },
+                {
+                  mode: 'transit' as TravelMode,
+                  icon: '🚇',
+                  label_es: 'Transporte',
+                  label_en: 'Transit',
+                  sub_es: 'Más lugares, metro o bus',
+                  sub_en: 'More stops, metro or bus',
+                },
+              ] as const).map(opt => (
+                <button
+                  key={opt.mode}
+                  onClick={() => setTravelMode(opt.mode)}
+                  className={`flex flex-col items-center gap-1.5 p-4 rounded-2xl border-2 transition-all active:scale-95 ${
+                    travelMode === opt.mode
+                      ? 'border-orange-500 bg-orange-50'
+                      : 'border-stone-200 bg-white'
+                  }`}
+                >
+                  <span className="text-3xl">{opt.icon}</span>
+                  <span className={`font-bold text-sm ${travelMode === opt.mode ? 'text-orange-700' : 'text-stone-800'}`}>
+                    {language === 'es' ? opt.label_es : opt.label_en}
+                  </span>
+                  <span className="text-xs text-stone-400 text-center leading-tight">
+                    {language === 'es' ? opt.sub_es : opt.sub_en}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Duration selector */}
         {selectedRouteType && (
           <div className="mb-8">
@@ -453,8 +528,8 @@ export function RouteSetupPage() {
                 </p>
                 <p className="text-sm text-stone-500">
                   {language === 'es'
-                    ? `${selectedDuration === 480 ? 'Día completo' : selectedDuration === 240 ? 'Medio día' : `${selectedDuration / 60}h`} · ~${Math.max(6, Math.min(14, Math.round(selectedDuration / 12)))} paradas`
-                    : `${selectedDuration === 480 ? 'Full day' : selectedDuration === 240 ? 'Half day' : `${selectedDuration / 60}h`} · ~${Math.max(6, Math.min(14, Math.round(selectedDuration / 12)))} stops`}
+                    ? `${travelMode === 'walk' ? '🚶' : '🚇'} ${selectedDuration === 480 ? 'Día completo' : selectedDuration === 240 ? 'Medio día' : `${selectedDuration / 60}h`} · ruta optimizada`
+                    : `${travelMode === 'walk' ? '🚶' : '🚇'} ${selectedDuration === 480 ? 'Full day' : selectedDuration === 240 ? 'Half day' : `${selectedDuration / 60}h`} · optimised route`}
                 </p>
               </div>
             </div>

@@ -1,4 +1,4 @@
-import type { RouteResult, NavigationStep } from '../types'
+import type { RouteResult, NavigationStep, POI } from '../types'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1/foot'
 
@@ -311,6 +311,45 @@ export function buildVoiceInstruction(step: NavigationStep, lang: 'es' | 'en'): 
 export function estimateWalkingTime(distanceMeters: number): number {
   // Average walking speed ~1.4 m/s = ~84 m/min
   return Math.round(distanceMeters / 84)
+}
+
+/**
+ * Trims an already-ordered POI list so the total estimated time (walking + visits)
+ * fits within `budgetMinutes`. Call this AFTER `orderPOIsOptimally`.
+ *
+ * Walk speed: 84 m/min (~5 km/h).
+ * Visit times are capped at 18 min — even large museums get a quick exterior visit
+ * on a guided walking tour; deep interior visits are self-directed.
+ * Always returns at least 3 POIs (or all available if fewer).
+ */
+export function fitRouteToTimeBudget(orderedPOIs: POI[], budgetMinutes: number): POI[] {
+  if (orderedPOIs.length <= 3) return orderedPOIs
+
+  const WALK_SPEED = 84    // m/min
+  const MIN_VISIT  = 8     // min per stop
+  const MAX_VISIT  = 18    // cap for a walking-tour stop
+  const TRANSITION = 2     // photo + reading buffer per stop
+
+  let used = 0
+  const result: POI[] = []
+
+  for (const poi of orderedPOIs) {
+    const walkMin = result.length === 0 ? 0 : (() => {
+      const prev = result[result.length - 1]
+      return calculateDistance(prev.lat, prev.lon, poi.lat, poi.lon) / WALK_SPEED
+    })()
+
+    const visitMin = Math.max(MIN_VISIT, Math.min(MAX_VISIT, poi.estimatedVisitMinutes ?? 12))
+    const stopCost = walkMin + visitMin + TRANSITION
+
+    // Always include the first 3 stops; stop adding when budget is exhausted
+    if (result.length >= 3 && used + stopCost > budgetMinutes) break
+
+    result.push(poi)
+    used += stopCost
+  }
+
+  return result
 }
 
 export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
