@@ -247,6 +247,20 @@ export function RouteSetupPage() {
         return
       }
 
+      // Sort by importance tier BEFORE geographic ordering so the nearest-neighbor
+      // algorithm starts from the most-important candidates, not arbitrary ones.
+      // Tier 0 = AI-verified (has shortDescription set by AI step)
+      // Tier 1 = Wikipedia geosearch (has wikipediaTitle, no shortDescription)
+      // Tier 2 = Overpass-only (no wikipediaTitle)
+      pois.sort((a, b) => {
+        const tierA = a.shortDescription ? 0 : a.wikipediaTitle ? 1 : 2
+        const tierB = b.shortDescription ? 0 : b.wikipediaTitle ? 1 : 2
+        return tierA - tierB
+      })
+      // Keep top 14 most-important candidates for geographic ordering — beyond that
+      // the marginal POIs are unlikely to fit in the time budget anyway.
+      pois = pois.slice(0, 14)
+
       // Order POIs for optimal walking path (nearest-neighbor from city centre)
       pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
 

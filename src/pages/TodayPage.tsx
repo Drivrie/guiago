@@ -174,10 +174,52 @@ export function TodayPage() {
     setPoiSearchLoading(true)
     setPoiResult(null)
     setPoiAudioScript('')
+    const [lat, lon] = userCoords
     try {
-      // Reverse geocode to nearest named place
+      // Step 1: Query Overpass for tourist/historic/worship features within 300m
+      const overpassQuery = `
+[out:json][timeout:10];
+(
+  node["tourism"~"attraction|museum|artwork|viewpoint|monument|gallery|theme_park|zoo"](around:300,${lat},${lon});
+  node["historic"~"monument|memorial|ruins|castle|archaeological_site|building|church"](around:300,${lat},${lon});
+  node["amenity"~"place_of_worship|theatre|arts_centre"](around:300,${lat},${lon});
+  way["tourism"~"attraction|museum|artwork|viewpoint|monument|gallery"](around:300,${lat},${lon});
+  way["historic"~"monument|memorial|ruins|castle|archaeological_site|building|church"](around:300,${lat},${lon});
+  way["amenity"~"place_of_worship|theatre|arts_centre"](around:300,${lat},${lon});
+);
+out center 5;`.trim()
+
+      const ovResp = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: `data=${encodeURIComponent(overpassQuery)}`,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      })
+
+      if (ovResp.ok) {
+        const ovData = await ovResp.json() as { elements?: Array<{ tags?: Record<string, string>; lat?: number; lon?: number; center?: { lat: number; lon: number } }> }
+        const elements = ovData.elements || []
+        // Pick the closest element with a name
+        let bestName: string | null = null
+        let bestDist = Infinity
+        for (const el of elements) {
+          const name = el.tags?.name || el.tags?.['name:es'] || el.tags?.['name:en']
+          if (!name) continue
+          const elLat = el.lat ?? el.center?.lat ?? 0
+          const elLon = el.lon ?? el.center?.lon ?? 0
+          const d = Math.hypot(elLat - lat, elLon - lon)
+          if (d < bestDist) { bestDist = d; bestName = name }
+        }
+        if (bestName) {
+          setPoiQuery(bestName)
+          setPoiSearchLoading(false)
+          await searchPOI(bestName)
+          return
+        }
+      }
+
+      // Step 2: Fall back to Nominatim at zoom=16 (city-area level, avoids business names)
       const resp = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${userCoords[0]}&lon=${userCoords[1]}&zoom=18&addressdetails=1`,
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=16&addressdetails=1`,
         { headers: { 'Accept-Language': es ? 'es' : 'en' } }
       )
       if (!resp.ok) { setPoiSearchLoading(false); return }

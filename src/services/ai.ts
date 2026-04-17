@@ -319,35 +319,35 @@ export async function generateAIAudioScript(
     lang === 'es'
       ? `Genera la narración de audio AL LLEGAR a "${poiName}" (${category}).
 
-${wikiDescription ? `Contexto histórico: ${wikiDescription.slice(0, 350)}` : ''}
+${wikiDescription ? `Contexto histórico: ${wikiDescription.slice(0, 1200)}` : ''}
 ${reason ? `Por qué es especial: ${reason}` : ''}
 ${insiderTip ? `Dato insider: ${insiderTip}` : ''}
 
-ESTRUCTURA OBLIGATORIA:
+ESTRUCTURA OBLIGATORIA (4 párrafos):
 0. PRIMERO (1-2 frases): pide al visitante que mire la imagen en pantalla para confirmar que está en el lugar correcto. Ej: "Mira la imagen que aparece en tu pantalla, ¿ves [descripción breve de la imagen]? ¡Eso es ${poiName}! Comprueba que estás frente a él."
 1. Abre con algo que capture atención AL INSTANTE: una pregunta sorprendente, una imagen vívida, o un dato impactante. NO empieces con "Bienvenido" ni "Aquí estamos".
-2. Cuenta 1-2 datos fascinantes y concretos de forma conversacional, como si se los contaras a un amigo
-3. Si hay insider tip, preséntalo como un secreto exclusivo: "Poca gente lo sabe, pero..."
-4. Cierra con algo que invite a disfrutar el momento: "Tómate un minuto para...", "Antes de seguir, mira hacia..."
+2. Desarrolla la historia con profundidad: 2-3 datos fascinantes, concretos e interconectados como haría un experto apasionado. Fechas, personajes, anécdotas reales, el contexto histórico que hace único a este lugar.
+3. Si hay insider tip, preséntalo como un secreto exclusivo: "Poca gente lo sabe, pero..." Añade qué ver específicamente: dónde mirar, qué detalle no perderse.
+4. Cierra con algo que invite a disfrutar el momento y cree anticipación: "Tómate un minuto para...", "Antes de seguir, mira hacia..."
 
-120-160 palabras. SOLO la narración, sin comillas, sin títulos, sin guiones. Voz viva, apasionada, personal.`
+300-400 palabras. SOLO la narración, sin comillas, sin títulos, sin guiones. Voz viva, apasionada, personal.`
       : `Generate audio narration ARRIVING AT "${poiName}" (${category}).
 
-${wikiDescription ? `Historical context: ${wikiDescription.slice(0, 350)}` : ''}
+${wikiDescription ? `Historical context: ${wikiDescription.slice(0, 1200)}` : ''}
 ${reason ? `Why it's special: ${reason}` : ''}
 ${insiderTip ? `Insider tip: ${insiderTip}` : ''}
 
-REQUIRED STRUCTURE:
+REQUIRED STRUCTURE (4 paragraphs):
 0. FIRST (1-2 sentences): ask the visitor to look at the image on screen to confirm they're at the right place. E.g.: "Take a look at the image on your screen — do you see [brief image description]? That's ${poiName}! Make sure you're standing in front of it."
 1. Open with something that grabs attention INSTANTLY: a surprising question, a vivid image, or a shocking fact. Do NOT start with "Welcome" or "Here we are".
-2. Share 1-2 fascinating, concrete facts conversationally, as if telling a friend
-3. If there's an insider tip, present it as an exclusive secret: "Not many people know that..."
-4. Close with something that invites them to enjoy the moment: "Take a minute to...", "Before we move on, look towards..."
+2. Develop the story with depth: 2-3 fascinating, concrete, interconnected facts as an expert would. Dates, characters, real anecdotes, the historical context that makes this place unique.
+3. If there's an insider tip, present it as an exclusive secret: "Not many people know that..." Add what to look at specifically: where to look, what detail not to miss.
+4. Close with something that invites them to enjoy the moment and builds anticipation: "Take a minute to...", "Before we move on, look towards..."
 
-120-160 words. ONLY the narration, no quotes, no titles, no dashes. Lively, passionate, personal voice.`
+300-400 words. ONLY the narration, no quotes, no titles, no dashes. Lively, passionate, personal voice.`
 
   try {
-    return await callAI(system, user, getAIKey(userKey), 500)
+    return await callAI(system, user, getAIKey(userKey), 1000)
   } catch (err) {
     console.error('AI audio script error:', err)
     return null

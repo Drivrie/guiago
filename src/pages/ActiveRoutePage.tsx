@@ -7,7 +7,7 @@ import { NavigationPanel } from '../components/NavigationPanel'
 import { BottomSheet } from '../components/ui/BottomSheet'
 import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
-import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
+import { getPOIInfoMultiSource, getPOIDescription, generateAudioScript } from '../services/wikipedia'
 import { getAudioScript } from '../services/storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
@@ -152,15 +152,16 @@ export function ActiveRoutePage() {
       const cached = await getAudioScript(currentPOI!.id, language)
       if (cached) { setAudioScript(cached); setAudioLoading(false); return }
 
-      // 2. Fetch Wikipedia description
-      const desc = await getPOIDescription(currentPOI!.name, language)
+      // 2. Fetch multi-source description (Wikipedia + Wikivoyage for richer context)
+      const multiSource = await getPOIInfoMultiSource(currentPOI!.name, language)
+      const desc = multiSource?.extract || await getPOIDescription(currentPOI!.name, language) || ''
 
       // 3. If AI key available (built-in or user), use Mistral for professional narration
       if (hasAIKey(anthropicApiKey)) {
         const insiderTip = currentPOI!.tags?.['insiderTip'] || undefined
         const reason = currentPOI!.shortDescription || ''
         const aiScript = await generateAIAudioScript(
-          currentPOI!.name, currentPOI!.category, desc || '', reason, insiderTip, language, getAIKey(anthropicApiKey)
+          currentPOI!.name, currentPOI!.category, desc, reason, insiderTip, language, getAIKey(anthropicApiKey)
         )
         if (aiScript) { setAudioScript(aiScript); setAudioLoading(false); return }
       }
@@ -798,16 +799,30 @@ export function ActiveRoutePage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
               </svg>
             </button>
-            {/* Maps overflow button */}
-            <button
-              onClick={() => setShowDownload(true)}
-              className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300 flex-shrink-0"
-              title={language === 'es' ? 'Más opciones' : 'More options'}
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" />
-              </svg>
-            </button>
+            {/* Direct Google Maps navigation button */}
+            {currentPOI ? (
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${currentPOI.lat},${currentPOI.lon}&travelmode=walking`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center text-white flex-shrink-0"
+                title={language === 'es' ? 'Abrir en Google Maps' : 'Open in Google Maps'}
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                </svg>
+              </a>
+            ) : (
+              <button
+                onClick={() => setShowDownload(true)}
+                className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300 flex-shrink-0"
+                title={language === 'es' ? 'Más opciones' : 'More options'}
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="12" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" />
+                </svg>
+              </button>
+            )}
           </div>
 
           {/* Primary action: Arrival button */}
