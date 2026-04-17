@@ -10,7 +10,7 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, fitRouteToTimeBudget } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, orderPOIsWeighted, fitRouteToTimeBudget } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 
 type TravelMode = 'walk' | 'transit'
@@ -261,8 +261,9 @@ export function RouteSetupPage() {
       // the marginal POIs are unlikely to fit in the time budget anyway.
       pois = pois.slice(0, 14)
 
-      // Order POIs for optimal walking path (nearest-neighbor from city centre)
-      pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
+      // Gravity-weighted ordering: balances importance AND proximity,
+      // so world-class monuments are never skipped for trivial nearby stops.
+      pois = orderPOIsWeighted(pois, selectedCity.lat, selectedCity.lon)
 
       // Trim the ordered list to what actually fits in the time budget.
       // Walking mode only — transit users accept longer travel times.

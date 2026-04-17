@@ -362,7 +362,6 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
   const unvisited = [...pois]
   const ordered: T[] = []
 
-  // Start from first POI or given start position
   let currentLat = startLat ?? pois[0].lat
   let currentLon = startLon ?? pois[0].lon
 
@@ -372,7 +371,6 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
     currentLon = ordered[0].lon
   }
 
-  // Nearest neighbor algorithm
   while (unvisited.length > 0) {
     let nearestIdx = 0
     let nearestDist = Infinity
@@ -389,6 +387,78 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
     ordered.push(nearest)
     currentLat = nearest.lat
     currentLon = nearest.lon
+  }
+
+  return ordered
+}
+
+/**
+ * Returns a 0–20 importance score for a POI based on data richness and category.
+ * Used by gravity-weighted ordering to prefer notable POIs over trivial nearby ones.
+ */
+export function poiImportance(poi: POI): number {
+  let score = 0
+  if (poi.shortDescription) score += 8   // AI-curated with reason
+  if (poi.wikipediaTitle) score += 4      // Verified Wikipedia entry
+  if (poi.imageUrl) score += 2            // Has a photo
+  if (poi.description && poi.description.length > 400) score += 2
+  if (poi.tags?.['opening_hours']) score += 1
+  const cat = poi.category.toLowerCase()
+  if (/catedral|cathedral|basílica|basilica/.test(cat)) score += 8
+  else if (/palacio|palace|alcázar|alhambra|alcazaba|castillo|castle/.test(cat)) score += 7
+  else if (/museo|museum/.test(cat)) score += 6
+  else if (/monumento|monument|patrimonio/.test(cat)) score += 5
+  else if (/iglesia|church|convento|monasterio/.test(cat)) score += 4
+  else if (/teatro|theatre|mercado|market/.test(cat)) score += 3
+  return Math.min(20, score)
+}
+
+/**
+ * Gravity-weighted nearest-neighbour ordering for POIs.
+ * Picks the next stop by:  attractiveness = importance / sqrt(distance_m + 100)
+ * A world-class monument 300 m away beats an unnamed fountain 80 m away,
+ * while still keeping geographically adjacent stops together.
+ */
+export function orderPOIsWeighted(
+  pois: POI[],
+  startLat?: number,
+  startLon?: number
+): POI[] {
+  if (pois.length <= 2) return pois
+
+  const unvisited = [...pois]
+  const ordered: POI[] = []
+
+  let currentLat = startLat ?? pois[0].lat
+  let currentLon = startLon ?? pois[0].lon
+
+  if (startLat === undefined) {
+    // Anchor on the highest-importance POI as the first stop
+    const anchorIdx = unvisited.reduce((best, poi, i) =>
+      poiImportance(poi) > poiImportance(unvisited[best]) ? i : best, 0)
+    const anchor = unvisited.splice(anchorIdx, 1)[0]
+    ordered.push(anchor)
+    currentLat = anchor.lat
+    currentLon = anchor.lon
+  }
+
+  while (unvisited.length > 0) {
+    let bestIdx = 0
+    let bestGravity = -Infinity
+
+    for (let i = 0; i < unvisited.length; i++) {
+      const dist = calculateDistance(currentLat, currentLon, unvisited[i].lat, unvisited[i].lon)
+      const gravity = (poiImportance(unvisited[i]) + 1) / Math.sqrt(dist + 100)
+      if (gravity > bestGravity) {
+        bestGravity = gravity
+        bestIdx = i
+      }
+    }
+
+    const best = unvisited.splice(bestIdx, 1)[0]
+    ordered.push(best)
+    currentLat = best.lat
+    currentLon = best.lon
   }
 
   return ordered

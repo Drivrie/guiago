@@ -316,19 +316,32 @@ function extractWikiTitle(wikiTag: string): string {
 function scorePOI(poi: POI): number {
   let score = 0
   const tags = poi.tags || {}
+  const cat = poi.category.toLowerCase()
 
-  if (tags.wikipedia) score += 10
-  if (tags.wikidata) score += 5
+  // Data richness — presence of authoritative external references
+  if (tags.wikipedia) score += 12   // strong notability signal
+  if (tags.wikidata) score += 6
   if (tags.website) score += 3
   if (tags.opening_hours) score += 2
-  if (tags.phone) score += 1
-  if (tags['addr:street']) score += 1
   if (tags.description) score += 3
   if (tags.image) score += 2
+  if (tags['addr:street']) score += 1
 
-  // Boost for certain types
-  if (['cathedral', 'palace', 'castle', 'museum'].includes(poi.category)) score += 10
-  if (['monument', 'ruins', 'archaeological_site'].includes(poi.category)) score += 7
+  // Category importance — tiered by typical tourist value
+  if (/catedral|cathedral|basílica|basilica/.test(cat)) score += 14
+  else if (/palacio|palace|alcázar|alhambra|alcazaba/.test(cat)) score += 13
+  else if (/castillo|castle|fort/.test(cat)) score += 12
+  else if (/museo|museum/.test(cat)) score += 11
+  else if (/monumento|monument/.test(cat)) score += 9
+  else if (/ruins|ruinas|archaeological/.test(cat)) score += 8
+  else if (/iglesia|church|convento|monasterio/.test(cat)) score += 7
+  else if (/teatro|theatre|opera/.test(cat)) score += 6
+  else if (/mercado|market/.test(cat)) score += 5
+  else if (/plaza|square|piazza/.test(cat)) score += 4
+  else if (/parque|jardín|park|garden/.test(cat)) score += 3
+
+  // UNESCO / heritage marker in name or description
+  if (/unesco|patrimonio|heritage/i.test(`${poi.name} ${poi.description || ''}`)) score += 8
 
   return score
 }

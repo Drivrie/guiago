@@ -48,6 +48,7 @@ export function ActiveRoutePage() {
   const [navigateToInput, setNavigateToInput] = useState('')
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
+  const earlyWarningFiredRef = useRef<number>(-1)  // tracks which step's 150m warning was spoken
 
   const currentPOI = pois[currentPOIIndex]
   const nextPOIObj = pois[currentPOIIndex + 1] || null
@@ -116,7 +117,6 @@ export function ActiveRoutePage() {
     if (phase !== 'navigating' || !userLocation || navSteps.length <= 1) return
     const nextStep = navSteps[currentStepIndex + 1]
     if (!nextStep?.coordinates) return
-    // coordinates is [lon, lat] from OSRM
     const dist = calculateDistance(
       userLocation[0], userLocation[1],
       nextStep.coordinates[1], nextStep.coordinates[0]
@@ -125,6 +125,39 @@ export function ActiveRoutePage() {
       setCurrentStepIndex(i => i + 1)
     }
   }, [userLocation, phase, navSteps, currentStepIndex])
+
+  // ---- Proactive 150m voice warning before upcoming turn ----
+  // Fires once per step when the user enters the 150m approach zone,
+  // giving extra time to prepare — mimicking Google Maps "in 150 meters" announcements.
+  useEffect(() => {
+    if (phase !== 'navigating' || voiceMuted || !userLocation || navSteps.length <= 1) return
+    const nextStep = navSteps[currentStepIndex + 1]
+    if (!nextStep?.coordinates || nextStep.direction === 'straight' || nextStep.direction === 'arrive') return
+    if (earlyWarningFiredRef.current === currentStepIndex) return  // already warned this step
+
+    const dist = calculateDistance(
+      userLocation[0], userLocation[1],
+      nextStep.coordinates[1], nextStep.coordinates[0]
+    )
+    if (dist > 50 && dist < 180) {
+      earlyWarningFiredRef.current = currentStepIndex
+      const distStr = language === 'es' ? `En ${Math.round(dist / 10) * 10} metros` : `In ${Math.round(dist / 10) * 10} meters`
+      const turnStr = language === 'es'
+        ? nextStep.direction === 'left' ? 'gira a la izquierda'
+          : nextStep.direction === 'right' ? 'gira a la derecha'
+          : nextStep.direction === 'slight_left' ? 'gira ligeramente a la izquierda'
+          : nextStep.direction === 'slight_right' ? 'gira ligeramente a la derecha'
+          : nextStep.direction === 'u_turn' ? 'da la vuelta'
+          : 'continúa'
+        : nextStep.direction === 'left' ? 'turn left'
+          : nextStep.direction === 'right' ? 'turn right'
+          : nextStep.direction === 'slight_left' ? 'turn slightly left'
+          : nextStep.direction === 'slight_right' ? 'turn slightly right'
+          : nextStep.direction === 'u_turn' ? 'make a U-turn'
+          : 'continue'
+      speak(`${distStr}, ${turnStr}.`, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
+    }
+  }, [userLocation, phase, navSteps, currentStepIndex, voiceMuted])
 
   // ---- Voice navigation: speak instruction when step changes ----
   useEffect(() => {

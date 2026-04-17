@@ -34,15 +34,17 @@ function cleanHtml(html: string): string {
 
 function scoreArticle(title: string, extract: string, routeType: RouteType): number {
   const text = `${title} ${extract.slice(0, 400)}`
+  // Article length is a strong proxy for Wikipedia notability — longer = more famous.
+  // Cap at +6 so keyword relevance still dominates over pure verbosity.
+  const lengthBonus = Math.min(6, Math.floor(extract.length / 250))
+
   if (routeType === 'imprescindibles') {
-    // Score highest overall landmark coverage
     const allMatches = (text.match(ALL_KEYWORDS_RE) || []).length
-    // Bonus for "famous/emblematic" language
     const notorietyBonus = /turístico|famoso|emblemático|icónico|símbolo|principal|destacad|patrimonio|unesco|known for|famous/i.test(text) ? 3 : 0
-    return allMatches + notorietyBonus
+    return allMatches + notorietyBonus + lengthBonus
   }
   const re = new RegExp(ROUTE_KEYWORDS[routeType].source, 'gi')
-  return (text.match(re) || []).length
+  return (text.match(re) || []).length + lengthBonus
 }
 
 /** Realistic visit times for a walking-tour stop (not a deep interior visit). */

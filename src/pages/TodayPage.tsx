@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { getPOIInfoMultiSource, generateAudioScript } from '../services/wikipedia'
 import { generateAIPOIExplanation, getAIKey, hasAIKey } from '../services/ai'
+import { getNearbyCities, getFlagEmoji } from '../services/nominatim'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { City, RouteType, RouteDuration, WikiResult } from '../types'
 
@@ -74,6 +75,9 @@ export function TodayPage() {
   const [poiAudioLoading, setPoiAudioLoading] = useState(false)
   const [searchExpanded, setSearchExpanded] = useState(false)
 
+  // Nearby cities state
+  const [nearbyCities, setNearbyCities] = useState<(City & { distanceKm: number })[]>([])
+
   const es = language === 'es'
 
   // Auto-detect location on mount
@@ -136,6 +140,15 @@ export function TodayPage() {
       requestLocation()
     }
   }, [])
+
+  // Fetch nearby cities when coords are available (background, non-blocking)
+  useEffect(() => {
+    if (!userCoords) return
+    const [lat, lon] = userCoords
+    getNearbyCities(lat, lon, language)
+      .then(cities => setNearbyCities(cities.filter(c => c.distanceKm > 1).slice(0, 8)))
+      .catch(() => {})
+  }, [userCoords, language])
 
   async function searchPOI(query: string) {
     if (!query.trim()) return
@@ -571,6 +584,35 @@ out center 5;`.trim()
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Nearby cities section */}
+      {phase === 'selecting' && nearbyCities.length > 0 && (
+        <div className="px-5 pb-4">
+          <p className="text-white/60 text-xs font-semibold uppercase tracking-wide mb-3">
+            {es ? 'O explora otra ciudad cercana' : 'Or explore a nearby city'}
+          </p>
+          <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
+            {nearbyCities.map(city => (
+              <button
+                key={city.id}
+                onClick={() => {
+                  setCity(city)
+                  navigate(`/city/${encodeURIComponent(city.name)}`)
+                }}
+                className="flex-shrink-0 flex flex-col items-center gap-1.5 bg-white/10 hover:bg-white/20 active:scale-95 rounded-2xl px-4 py-3 transition-all min-w-[90px]"
+              >
+                <span className="text-2xl">{getFlagEmoji(city.countryCode)}</span>
+                <p className="text-white text-xs font-semibold text-center leading-tight">{city.name}</p>
+                <p className="text-blue-300 text-[10px]">
+                  {city.distanceKm < 10
+                    ? (es ? 'Muy cerca' : 'Very close')
+                    : (es ? `${city.distanceKm} km` : `${city.distanceKm} km`)}
+                </p>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
