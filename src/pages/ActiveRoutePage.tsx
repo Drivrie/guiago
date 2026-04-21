@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { MapView } from '../components/MapView'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { OfflineDownload } from '../components/OfflineDownload'
@@ -31,6 +31,9 @@ export function ActiveRoutePage() {
     userLocation: globalUserLocation, setUserLocation: setGlobalUserLocation
   } = useAppStore()
 
+  const location = useLocation()
+  const coverageNotice = (location.state as { coverageNotice?: string | null } | null)?.coverageNotice ?? null
+
   const [phase, setPhase] = useState<GuidePhase>('selecting_start')
   const [userLocation, setUserLocation] = useState<[number, number] | null>(globalUserLocation)
   const [audioScript, setAudioScript] = useState('')
@@ -39,6 +42,7 @@ export function ActiveRoutePage() {
   const [rebuilding, setRebuilding] = useState(false)
   const [showManualList, setShowManualList] = useState(false)
   const [distanceToPOI, setDistanceToPOI] = useState<number | null>(null)
+  const [distanceToNextTurn, setDistanceToNextTurn] = useState<number | null>(null)
   const [showDownload, setShowDownload] = useState(false)
   const [voiceMuted, setVoiceMuted] = useState(false)
   const [preRouteSegment, setPreRouteSegment] = useState<RouteSegment | null>(null)
@@ -48,6 +52,8 @@ export function ActiveRoutePage() {
   const [navigateToInput, setNavigateToInput] = useState('')
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
+  // Tracks which voice distance milestones have already been announced per step
+  const voiceMilestonesRef = useRef<Set<string>>(new Set())
 
   const currentPOI = pois[currentPOIIndex]
   const nextPOIObj = pois[currentPOIIndex + 1] || null
@@ -99,17 +105,44 @@ export function ActiveRoutePage() {
     }
   }, [phase])
 
-  // ---- GPS arrival detection (30m auto-arrive) ----
+  // ---- GPS: arrival detection + live distance to next turn + proactive voice ----
   useEffect(() => {
     if (phase !== 'navigating' || !userLocation || !currentPOI) return
-    const dist = calculateDistance(userLocation[0], userLocation[1], currentPOI.lat, currentPOI.lon)
-    setDistanceToPOI(Math.round(dist))
-    if (dist < 30) {
+
+    const distPOI = calculateDistance(userLocation[0], userLocation[1], currentPOI.lat, currentPOI.lon)
+    setDistanceToPOI(Math.round(distPOI))
+
+    if (distPOI < 30) {
       setInPreRoute(false)
       setPreRouteSegment(null)
       triggerArrival()
+      return
     }
-  }, [userLocation, phase, currentPOIIndex])
+
+    // Live distance to the next maneuver point (step N+1's coordinates)
+    const nextManeuverStep = navSteps[currentStepIndex + 1]
+    if (nextManeuverStep?.coordinates) {
+      const [lon, lat] = nextManeuverStep.coordinates
+      const distTurn = calculateDistance(userLocation[0], userLocation[1], lat, lon)
+      setDistanceToNextTurn(Math.round(distTurn))
+
+      // Proactive voice at 200 m and 80 m from next turn (Google Maps style)
+      if (!voiceMuted && nextManeuverStep.direction !== 'arrive' && nextManeuverStep.instruction) {
+        for (const threshold of [200, 80] as const) {
+          if (distTurn <= threshold + 18 && distTurn >= threshold - 18) {
+            const key = `${currentStepIndex}-${threshold}`
+            if (!voiceMilestonesRef.current.has(key)) {
+              voiceMilestonesRef.current.add(key)
+              const prefix = language === 'es' ? `En ${threshold} metros, ` : `In ${threshold} meters, `
+              speak(prefix + nextManeuverStep.instruction, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
+            }
+          }
+        }
+      }
+    } else {
+      setDistanceToNextTurn(null)
+    }
+  }, [userLocation, phase, currentPOIIndex, currentStepIndex])
 
   // ---- Auto-advance navigation step when approaching next turn point ----
   useEffect(() => {
@@ -176,11 +209,19 @@ export function ActiveRoutePage() {
     loadAudio()
   }, [phase, currentPOI?.id])
 
-  // ---- Reset step index on POI change ----
+  // ---- Reset step state on POI change ----
   useEffect(() => {
     setCurrentStepIndex(0)
     setDistanceToPOI(null)
+    setDistanceToNextTurn(null)
+    voiceMilestonesRef.current = new Set()
   }, [currentPOIIndex])
+
+  // ---- Reset voice milestones when the active step changes ----
+  useEffect(() => {
+    voiceMilestonesRef.current = new Set()
+    setDistanceToNextTurn(null)
+  }, [currentStepIndex])
 
   // ---- Announce route ready when entering ready_to_start ----
   useEffect(() => {
@@ -431,6 +472,14 @@ export function ActiveRoutePage() {
               </p>
             </div>
           </div>
+
+          {/* Coverage notice: fewer POIs than requested duration expected */}
+          {coverageNotice && (
+            <div className="bg-amber-900/40 border border-amber-700/50 rounded-xl px-3 py-2.5 mb-3 flex items-start gap-2">
+              <span className="text-amber-400 flex-shrink-0 mt-0.5">ℹ️</span>
+              <p className="text-amber-200 text-xs flex-1">{coverageNotice}</p>
+            </div>
+          )}
 
           {/* Offline audio warning */}
           {currentRoute?.isOffline && (
@@ -728,11 +777,12 @@ export function ActiveRoutePage() {
               <NavigationPanel
                 currentStep={currentNavStep}
                 nextStep={nextNavStep ?? undefined}
-                remainingDistance={activeSegment?.distance}
-                remainingTime={activeSegment?.duration}
+                remainingDistance={distanceToPOI ?? activeSegment?.distance}
+                remainingTime={distanceToPOI != null ? distanceToPOI / 1.4 : activeSegment?.duration}
                 targetPOIName={currentPOI?.name}
                 stepIndex={currentStepIndex}
                 totalSteps={navSteps.length}
+                distanceToNextTurn={distanceToNextTurn ?? undefined}
               />
             </div>
             {/* Voice mute toggle */}

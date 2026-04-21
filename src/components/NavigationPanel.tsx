@@ -9,6 +9,8 @@ interface NavigationPanelProps {
   targetPOIName?: string
   stepIndex?: number
   totalSteps?: number
+  /** Live GPS distance to the next maneuver point (updates every GPS tick) */
+  distanceToNextTurn?: number
 }
 
 function formatMeters(m: number): string {
@@ -24,7 +26,15 @@ function formatMinutes(secs: number): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}min`
 }
 
-// SVG direction arrow — matches Google Maps style
+// Returns bg colour class based on closeness to next turn
+function turnDistanceColour(dist?: number): string {
+  if (dist === undefined) return 'text-blue-200'
+  if (dist < 50) return 'text-green-300'
+  if (dist < 100) return 'text-yellow-300'
+  return 'text-blue-200'
+}
+
+// SVG direction arrow — matches Google Maps style with smooth rotation
 function DirectionArrow({ direction }: { direction?: string }) {
   const d = direction || 'straight'
 
@@ -64,6 +74,29 @@ function DirectionArrow({ direction }: { direction?: string }) {
   )
 }
 
+// Mini direction arrow for next-step preview
+function MiniArrow({ direction }: { direction?: string }) {
+  const d = direction || 'straight'
+  const rotations: Record<string, number> = {
+    straight: 0, left: -90, right: 90,
+    slight_left: -45, slight_right: 45, u_turn: 180, arrive: 0
+  }
+  return (
+    <svg
+      viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"
+      style={{
+        width: 20, height: 20,
+        transform: `rotate(${rotations[d] ?? 0}deg)`,
+        transition: 'transform 0.3s',
+        flexShrink: 0,
+      }}
+    >
+      <path d="M10 16 L10 6" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.7"/>
+      <path d="M6 10 L10 6 L14 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.7"/>
+    </svg>
+  )
+}
+
 export function NavigationPanel({
   currentStep,
   nextStep,
@@ -72,11 +105,12 @@ export function NavigationPanel({
   targetPOIName,
   stepIndex,
   totalSteps,
+  distanceToNextTurn,
 }: NavigationPanelProps) {
   const { language } = useAppStore()
 
+  // ── No steps yet — "head towards" fallback card ─────────────────────────
   if (!currentStep) {
-    // No steps yet — show "head towards" panel
     if (!targetPOIName) return null
     return (
       <div className="bg-[#1a73e8] rounded-2xl overflow-hidden shadow-xl">
@@ -89,7 +123,7 @@ export function NavigationPanel({
             <p className="text-blue-200 text-sm truncate">{targetPOIName}</p>
           </div>
           {remainingDistance !== undefined && (
-            <div className="text-right flex-shrink-0">
+            <div className="text-right flex-shrink-0 pl-2 border-l border-white/20">
               <p className="text-white font-black text-lg leading-none">{formatMeters(remainingDistance)}</p>
               {remainingTime !== undefined && (
                 <p className="text-blue-200 text-xs mt-0.5">{formatMinutes(remainingTime)}</p>
@@ -103,32 +137,50 @@ export function NavigationPanel({
 
   const isArriving = currentStep.direction === 'arrive'
 
+  // Live distance shown in the main instruction area:
+  // - If GPS distance to next turn is available → use it (live, updates every second)
+  // - Otherwise fall back to static OSRM step distance
+  const primaryDist = distanceToNextTurn ?? (currentStep.distance > 0 ? currentStep.distance : undefined)
+  const distColour = turnDistanceColour(distanceToNextTurn)
+
+  // Alert threshold: pulse animation when within 80m of next turn
+  const nearTurn = distanceToNextTurn !== undefined && distanceToNextTurn < 80
+
   return (
     <div className={`rounded-2xl overflow-hidden shadow-xl ${isArriving ? 'bg-[#0d7a3e]' : 'bg-[#1a1a2e]'}`}>
-      {/* Main instruction row */}
+
+      {/* ── Main instruction row ─────────────────────────────────────────── */}
       <div className="flex items-center gap-3 px-4 py-3">
-        <DirectionArrow direction={currentStep.direction} />
+        <div className={nearTurn ? 'animate-pulse' : ''}>
+          <DirectionArrow direction={currentStep.direction} />
+        </div>
+
         <div className="flex-1 min-w-0">
           <p className="text-white font-bold text-base leading-tight line-clamp-2">
             {currentStep.instruction}
           </p>
-          {currentStep.distance > 0 && !isArriving && (
-            <p className="text-blue-200 text-sm font-semibold mt-0.5">
-              {language === 'es' ? 'en ' : 'in '}{formatMeters(currentStep.distance)}
+          {/* Live distance countdown to next maneuver */}
+          {primaryDist !== undefined && !isArriving && (
+            <p className={`text-sm font-bold mt-0.5 tabular-nums transition-colors duration-300 ${distColour}`}>
+              {language === 'es' ? 'en ' : 'in '}{formatMeters(primaryDist)}
             </p>
           )}
         </div>
+
+        {/* ETA + remaining distance to POI */}
         {remainingDistance !== undefined && !isArriving && (
-          <div className="text-right flex-shrink-0 pl-1 border-l border-white/20">
-            <p className="text-white font-black text-lg leading-none">{formatMeters(remainingDistance)}</p>
+          <div className="text-right flex-shrink-0 pl-2 border-l border-white/20 min-w-[52px]">
+            <p className="text-white font-black text-base leading-none tabular-nums">
+              {formatMeters(remainingDistance)}
+            </p>
             {remainingTime !== undefined && (
-              <p className="text-blue-200 text-xs mt-0.5">{formatMinutes(remainingTime)}</p>
+              <p className="text-blue-200 text-xs mt-0.5 tabular-nums">{formatMinutes(remainingTime)}</p>
             )}
           </div>
         )}
       </div>
 
-      {/* Step counter badge */}
+      {/* ── Step progress bar ───────────────────────────────────────────── */}
       {stepIndex !== undefined && totalSteps !== undefined && totalSteps > 1 && (
         <div className="px-4 pb-1">
           <div className="flex items-center gap-1.5">
@@ -138,32 +190,25 @@ export function NavigationPanel({
                 style={{ width: `${((stepIndex + 1) / totalSteps) * 100}%` }}
               />
             </div>
-            <span className="text-white/60 text-xs flex-shrink-0">
+            <span className="text-white/60 text-xs flex-shrink-0 tabular-nums">
               {stepIndex + 1}/{totalSteps}
             </span>
           </div>
         </div>
       )}
 
-      {/* Next step preview bar */}
+      {/* ── Next-step preview bar ───────────────────────────────────────── */}
       {nextStep && !isArriving && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-black/20">
-          <span className="text-white/60 text-xs">{language === 'es' ? 'Luego:' : 'Then:'}</span>
-          <div className="w-5 h-5 flex-shrink-0">
-            <svg
-              viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"
-              style={{
-                transform: `rotate(${({ straight: 0, left: -90, right: 90, slight_left: -45, slight_right: 45, u_turn: 180, arrive: 0 }[nextStep.direction || 'straight'] ?? 0)}deg)`,
-                transition: 'transform 0.3s'
-              }}
-            >
-              <path d="M10 16 L10 6" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.7"/>
-              <path d="M6 10 L10 6 L14 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.7"/>
-            </svg>
-          </div>
+        <div className="flex items-center gap-2 px-4 py-2 bg-black/25">
+          <span className="text-white/50 text-xs flex-shrink-0">
+            {language === 'es' ? 'Luego:' : 'Then:'}
+          </span>
+          <MiniArrow direction={nextStep.direction} />
           <p className="text-white/80 text-xs truncate flex-1">{nextStep.instruction}</p>
           {nextStep.distance > 0 && (
-            <span className="text-white/60 text-xs flex-shrink-0">{formatMeters(nextStep.distance)}</span>
+            <span className="text-white/50 text-xs flex-shrink-0 tabular-nums">
+              {formatMeters(nextStep.distance)}
+            </span>
           )}
         </div>
       )}

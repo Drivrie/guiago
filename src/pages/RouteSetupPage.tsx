@@ -211,6 +211,17 @@ export function RouteSetupPage() {
       pois = optimized.pois
       setPOIs(pois)
 
+      // Detect thin coverage: route significantly shorter than requested duration
+      let coverageNotice: string | null = null
+      if (pois.length > 0 && optimized.totalMinutes < selectedDuration * 0.6) {
+        const actualMins = Math.round(optimized.totalMinutes)
+        const h = Math.floor(actualMins / 60), m = actualMins % 60
+        const durStr = h > 0 ? `${h}h${m > 0 ? ` ${m}min` : ''}` : `${actualMins} min`
+        coverageNotice = language === 'es'
+          ? `Solo encontramos ${pois.length} parada${pois.length !== 1 ? 's' : ''} en ${selectedCity.name} para esta ruta. La duración real será de aproximadamente ${durStr}, no de ${selectedDuration >= 60 ? `${selectedDuration / 60}h` : `${selectedDuration} min`}.`
+          : `Only ${pois.length} stop${pois.length !== 1 ? 's' : ''} found in ${selectedCity.name} for this route. Actual duration will be approximately ${durStr}, not ${selectedDuration >= 60 ? `${selectedDuration / 60}h` : `${selectedDuration} min`}.`
+      }
+
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
 
       // Build OSRM segments
@@ -257,7 +268,7 @@ export function RouteSetupPage() {
       }
 
       setRoute(route)
-      navigate('/route/active')
+      navigate('/route/active', { state: { coverageNotice } })
     } catch (err) {
       setError(language === 'es'
         ? 'Error al generar la ruta. Comprueba tu conexión.'
