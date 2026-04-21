@@ -8,7 +8,7 @@ import { useAppStore } from '../stores/appStore'
 import { getPOIsByCity } from '../services/overpass'
 import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
-import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
+import { searchPOIsWikipedia } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
 import { getRoute, getStepByStepInstructions, getDirectRoute } from '../services/routing'
 import { optimizeRouteByTimeBudget } from '../services/routeOptimizer'
@@ -33,6 +33,18 @@ const POPULAR_SUGGESTIONS = [
   { icon: '🗝️', type: 'secretos_locales' as RouteType, duration: 120 as RouteDuration, label_es: 'Secretos 2h', label_en: '2h Secrets' },
   { icon: '💀', type: 'historia_negra' as RouteType, duration: 120 as RouteDuration, label_es: 'Historia oscura 2h', label_en: '2h Dark history' },
 ]
+
+/** Returns true when two POI names refer to the same place (fuzzy match). */
+function namesMatch(a: string, b: string): boolean {
+  a = a.toLowerCase().trim()
+  b = b.toLowerCase().trim()
+  if (a === b) return true
+  if (a.includes(b) || b.includes(a)) return true
+  // Match on shared first two words (handles "Catedral de Santiago" ≈ "Cathedral of Santiago")
+  const wa = a.split(/\s+/).slice(0, 2).join(' ')
+  const wb = b.split(/\s+/).slice(0, 2).join(' ')
+  return wa.length >= 6 && wb.length >= 6 && (wa === wb || a.includes(wb) || b.includes(wa))
+}
 
 export function RouteSetupPage() {
   const { cityName } = useParams<{ cityName: string }>()
@@ -84,120 +96,62 @@ export function RouteSetupPage() {
     setAiRouteStory(null)
     setUsingAI(false)
 
-    // Fetch generous candidate pool; the optimizer selects the best subset within the time budget
-    const maxPOIs = Math.max(8, Math.min(30, Math.floor(selectedDuration / 8)))
     const visitedNames = avoidVisited ? getVisitedPOINames(selectedCity.id) : []
     const aiAvailable = hasAIKey(anthropicApiKey)
     const aiKey = getAIKey(anthropicApiKey)
-
-    setLoading(true, language === 'es' ? 'Buscando lugares de interés...' : 'Finding points of interest...')
+    // Large candidate pool — optimizer selects best subset within time budget
+    const maxCandidates = Math.max(15, Math.min(35, Math.floor(selectedDuration / 6)))
+    let usedRouteType = selectedRouteType
 
     try {
-      let pois: POI[] = []
-      let usedRouteType = selectedRouteType
+      // ── Step 1: Fetch Wikipedia geosearch + Overpass ALWAYS (in parallel) ─
+      setLoading(true, language === 'es' ? 'Buscando lugares de interés...' : 'Finding points of interest...')
 
-      // ============================================================
-      // AI-ENHANCED PATH: Mistral generates curated POI list
-      // ============================================================
-      if (aiAvailable) {
-        setLoading(true, language === 'es' ? '🤖 Creando ruta con IA...' : '🤖 Creating AI-powered route...')
-        setUsingAI(true)
+      const [wikiPOIs, overpassPOIs] = await Promise.all([
+        searchPOIsWikipedia(selectedCity, selectedRouteType, maxCandidates, language, visitedNames),
+        getPOIsByCity(selectedCity, selectedRouteType, selectedDuration),
+      ])
 
-        const aiResult = await generateAIRoute(
-          selectedCity.name,
-          selectedCity.country,        // pass country to prevent city-name ambiguity
-          selectedRouteType,
-          selectedDuration,
-          language,
-          aiKey,
-          visitedNames
-        )
-
-        if (aiResult && aiResult.suggestedPOIs.length > 0) {
-          setAiRouteStory(aiResult.routeStory)
-
-          // Resolve each AI-suggested POI to real Wikipedia data + coordinates
-          setLoading(true, language === 'es' ? '🔍 Verificando lugares en Wikipedia...' : '🔍 Verifying places on Wikipedia...')
-
-          const resolvedPOIs: POI[] = []
-          for (const aiPOI of aiResult.suggestedPOIs) {
-            const wikiPOI = await searchPOIByName(aiPOI.name, selectedCity, selectedRouteType, language)
-            if (wikiPOI) {
-              // Final safety check: reject any POI whose coordinates are clearly wrong city
-              // (searchPOIByName already does this, but double-check here as well)
-              const distDeg = Math.sqrt(
-                Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
-                Math.pow(wikiPOI.lon - selectedCity.lon, 2)
-              )
-              if (distDeg > 0.5) {
-                console.warn(`Rejected out-of-city POI: ${wikiPOI.name} (${wikiPOI.lat},${wikiPOI.lon}) for ${selectedCity.name}`)
-                continue
-              }
-              resolvedPOIs.push({
-                ...wikiPOI,
-                // Enhance with AI metadata
-                shortDescription: aiPOI.reason,
-                tags: { ...(wikiPOI.tags || {}), insiderTip: aiPOI.insiderTip || '' },
-              })
-            }
-          }
-
-          if (resolvedPOIs.length >= 3) {
-            pois = resolvedPOIs
-          } else {
-            // AI suggestions not verifiable near this city, fall through to Wikipedia geosearch
-            setUsingAI(false)
-          }
-        } else {
-          setUsingAI(false)
+      // ── Step 2: Merge, deduplicate by name ───────────────────────────────
+      const seenNames = new Set(wikiPOIs.map(p => p.name.toLowerCase().trim()))
+      const candidates: POI[] = [...wikiPOIs]
+      for (const op of overpassPOIs) {
+        const key = op.name.toLowerCase().trim()
+        if (!seenNames.has(key) && !visitedNames.some(v => v.toLowerCase() === key)) {
+          seenNames.add(key)
+          candidates.push(op)
         }
       }
 
-      // ============================================================
-      // WIKIPEDIA GEOSEARCH PATH (fallback or no API key)
-      // ============================================================
-      if (pois.length < 3) {
-        async function searchForType(rType: RouteType): Promise<POI[]> {
-          setLoading(true, language === 'es' ? `Buscando en Wikipedia...` : 'Searching Wikipedia...')
-          let results = await searchPOIsWikipedia(selectedCity!, rType, maxPOIs, language, visitedNames)
-          if (results.length < 3) {
-            setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
-            const overpassPOIs = await getPOIsByCity(selectedCity!, rType, selectedDuration!)
-            const existingNames = new Set(results.map(p => p.name.toLowerCase()))
-            for (const op of overpassPOIs) {
-              if (!existingNames.has(op.name.toLowerCase()) &&
-                  !visitedNames.some(v => v.toLowerCase() === op.name.toLowerCase())) {
-                results.push(op)
-                existingNames.add(op.name.toLowerCase())
-              }
-            }
+      // ── Step 3: Fallback route type if city has almost no POIs ───────────
+      if (candidates.length < 4) {
+        for (const fbType of ROUTE_FALLBACKS[selectedRouteType] ?? []) {
+          const fbInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
+          setLoading(true, language === 'es'
+            ? `Buscando alternativas: "${fbInfo?.labelEs || fbType}"...`
+            : `Searching alternatives: "${fbInfo?.labelEn || fbType}"...`)
+          const [fbWiki, fbOverpass] = await Promise.all([
+            searchPOIsWikipedia(selectedCity, fbType, maxCandidates, language, visitedNames),
+            getPOIsByCity(selectedCity, fbType, selectedDuration),
+          ])
+          const fbMerged = [...fbWiki]
+          const fbNames = new Set(fbWiki.map(p => p.name.toLowerCase()))
+          for (const op of fbOverpass) {
+            if (!fbNames.has(op.name.toLowerCase())) fbMerged.push(op)
           }
-          return results
-        }
-
-        let found = await searchForType(selectedRouteType)
-
-        // Try fallback types if still not enough
-        if (found.length < 3) {
-          for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
-            const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
-            setLoading(true, language === 'es'
-              ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
-              : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
-            const fbPOIs = await searchForType(fbType)
-            if (fbPOIs.length >= 3) {
-              found = fbPOIs
-              usedRouteType = fbType
-              setFallbackInfo({ requested: selectedRouteType, found: fbType })
-              break
-            }
+          if (fbMerged.length >= 3) {
+            const existingKeys = new Set(candidates.map(p => p.name.toLowerCase()))
+            fbMerged.forEach(p => {
+              if (!existingKeys.has(p.name.toLowerCase())) candidates.push(p)
+            })
+            usedRouteType = fbType
+            setFallbackInfo({ requested: selectedRouteType, found: fbType })
+            break
           }
         }
-
-        pois = found
       }
 
-      if (pois.length === 0) {
+      if (candidates.length === 0) {
         setError(language === 'es'
           ? 'No se encontraron lugares de interés. Prueba otra ciudad o tipo de ruta.'
           : 'No points of interest found. Try another city or route type.')
@@ -206,20 +160,53 @@ export function RouteSetupPage() {
         return
       }
 
-      // Select and order POIs using time-budget knapsack optimizer
-      const optimized = optimizeRouteByTimeBudget(pois, selectedDuration, selectedCity.lat, selectedCity.lon)
-      pois = optimized.pois
+      // ── Step 4: AI enriches candidates by fuzzy name-match (non-blocking) ─
+      // The AI generates a story + reasons/tips that are matched onto
+      // candidates already found in OSM/Wikipedia. This avoids the old
+      // bottleneck where AI verification could lose 80% of suggestions.
+      if (aiAvailable) {
+        setLoading(true, language === 'es' ? '🤖 Curación inteligente de la ruta...' : '🤖 AI route curation...')
+        setUsingAI(true)
+        try {
+          const aiResult = await generateAIRoute(
+            selectedCity.name, selectedCity.country, selectedRouteType,
+            selectedDuration, language, aiKey, visitedNames
+          )
+          if (aiResult) {
+            setAiRouteStory(aiResult.routeStory)
+            // Match each AI suggestion to an existing candidate (fuzzy)
+            for (const aiPOI of aiResult.suggestedPOIs) {
+              const match = candidates.find(c => namesMatch(c.name, aiPOI.name))
+              if (match) {
+                match.shortDescription = aiPOI.reason
+                match.tags = { ...(match.tags ?? {}), insiderTip: aiPOI.insiderTip ?? '' }
+              }
+            }
+            // Sort: AI-enriched candidates first (they have shortDescription)
+            candidates.sort((a, b) => (b.shortDescription ? 1 : 0) - (a.shortDescription ? 1 : 0))
+          } else {
+            setUsingAI(false)
+          }
+        } catch {
+          setUsingAI(false)
+        }
+      }
+
+      // ── Step 5: Optimizer — select max POIs within time budget ───────────
+      const optimized = optimizeRouteByTimeBudget(candidates, selectedDuration, selectedCity.lat, selectedCity.lon)
+      let pois = optimized.pois
       setPOIs(pois)
 
-      // Detect thin coverage: route significantly shorter than requested duration
+      // Thin-coverage notice when city has very few POIs for the requested time
       let coverageNotice: string | null = null
       if (pois.length > 0 && optimized.totalMinutes < selectedDuration * 0.6) {
         const actualMins = Math.round(optimized.totalMinutes)
         const h = Math.floor(actualMins / 60), m = actualMins % 60
         const durStr = h > 0 ? `${h}h${m > 0 ? ` ${m}min` : ''}` : `${actualMins} min`
+        const reqH = selectedDuration >= 60 ? `${selectedDuration / 60}h` : `${selectedDuration} min`
         coverageNotice = language === 'es'
-          ? `Solo encontramos ${pois.length} parada${pois.length !== 1 ? 's' : ''} en ${selectedCity.name} para esta ruta. La duración real será de aproximadamente ${durStr}, no de ${selectedDuration >= 60 ? `${selectedDuration / 60}h` : `${selectedDuration} min`}.`
-          : `Only ${pois.length} stop${pois.length !== 1 ? 's' : ''} found in ${selectedCity.name} for this route. Actual duration will be approximately ${durStr}, not ${selectedDuration >= 60 ? `${selectedDuration / 60}h` : `${selectedDuration} min`}.`
+          ? `Solo encontramos ${pois.length} parada${pois.length !== 1 ? 's' : ''} en ${selectedCity.name} para esta temática. La ruta durará ~${durStr} en lugar de ${reqH} — se recorre todo lo disponible en la zona.`
+          : `Only ${pois.length} stop${pois.length !== 1 ? 's' : ''} found in ${selectedCity.name} for this theme. Route will take ~${durStr} instead of ${reqH} — covers all available spots in the area.`
       }
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
