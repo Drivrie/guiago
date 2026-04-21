@@ -45,6 +45,34 @@ function scoreArticle(title: string, extract: string, routeType: RouteType): num
   return (text.match(re) || []).length
 }
 
+function estimateVisitMinutes(category: string, routeType: RouteType): number {
+  const cat = category.toLowerCase()
+  if (/museum|museo/.test(cat)) return 40
+  if (/cathedral|catedral|basílica|basilica/.test(cat)) return 20
+  if (/church|iglesia|convento|monasterio/.test(cat)) return 15
+  if (/palace|palacio|castle|castillo/.test(cat)) return 20
+  if (/market|mercado/.test(cat)) return 25
+  if (/park|parque/.test(cat)) return 18
+  if (/garden|jardín/.test(cat)) return 15
+  if (/restaurant|restaurante|bar|cafe/.test(cat)) return 40
+  if (/fountain|fuente|statue|estatua|memorial/.test(cat)) return 8
+  if (/square|plaza/.test(cat)) return 10
+  if (/monument|monumento/.test(cat)) return 12
+  if (/bridge|puente/.test(cat)) return 8
+  if (/cemetery|cementerio/.test(cat)) return 12
+  const defaults: Record<RouteType, number> = {
+    imprescindibles: 15,
+    secretos_locales: 10,
+    monumental: 15,
+    historia_negra: 10,
+    curiosidades: 8,
+    gastronomia: 30,
+    arquitectura: 12,
+    naturaleza: 15,
+  }
+  return defaults[routeType] ?? 15
+}
+
 function guessCategory(title: string, extract: string, routeType: RouteType): string {
   const t = `${title} ${extract.slice(0, 200)}`.toLowerCase()
   if (/catedral|basílica/.test(t)) return 'catedral'
@@ -95,8 +123,8 @@ export async function searchPOIsWikipedia(
       action: 'query',
       list: 'geosearch',
       gscoord: `${city.lat}|${city.lon}`,
-      gsradius: '3000',
-      gslimit: '50',
+      gsradius: '5000',
+      gslimit: '80',
       format: 'json',
       origin: '*',
     })
@@ -143,18 +171,19 @@ export async function searchPOIsWikipedia(
       if (extract.length < 50) continue
 
       const score = scoreArticle(geoItem.title, extract, routeType)
+      const category = guessCategory(geoItem.title, extract, routeType)
 
       scored.push({
         id: `wiki-${geoItem.pageid}`,
         name: geoItem.title,
         lat: geoItem.lat,
         lon: geoItem.lon,
-        category: guessCategory(geoItem.title, extract, routeType),
+        category,
         routeType,
         description: extract,
         imageUrl: (page as { thumbnail?: { source?: string } }).thumbnail?.source,
         wikipediaTitle: geoItem.title,
-        estimatedVisitMinutes: 20,
+        estimatedVisitMinutes: estimateVisitMinutes(category, routeType),
         tags: {},
         _score: score,
       })
@@ -260,17 +289,18 @@ async function trySearchPOIInWiki(
     const extract = cleanHtml(page.extract || '')
     if (extract.length < 30) continue
 
+    const category = guessCategory(name, extract, routeType)
     return {
       id: `wiki-${hit.pageid}`,
       name: page.title || name,
       lat: coords.lat,
       lon: coords.lon,
-      category: guessCategory(name, extract, routeType),
+      category,
       routeType,
       description: extract,
       imageUrl: page.thumbnail?.source,
       wikipediaTitle: page.title,
-      estimatedVisitMinutes: 20,
+      estimatedVisitMinutes: estimateVisitMinutes(category, routeType),
       tags: {},
     }
   }

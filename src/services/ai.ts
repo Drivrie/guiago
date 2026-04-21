@@ -200,8 +200,9 @@ export async function generateAIRoute(
   userKey: string,
   excludeNames: string[] = []
 ): Promise<AIRouteResult | null> {
-  // More POIs: 1 per 15 min, min 5, max 15
-  const maxPOIs = Math.max(5, Math.min(15, Math.floor(durationMinutes / 15)))
+  // Request a generous candidate list; the optimizer will select the best subset within the time budget.
+  // Formula: ~1 POI per 12 min (avg 10 min visit + 2 min walk overhead), min 6, max 18.
+  const maxPOIs = Math.max(6, Math.min(18, Math.floor(durationMinutes / 12)))
   const typeDesc = ROUTE_TYPE_DESC[routeType][lang]
   // Always use "CityName, Country" to avoid ambiguity (e.g. Roma Poland vs Roma Italy)
   const locationDesc = countryName ? `${cityName}, ${countryName}` : cityName

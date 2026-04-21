@@ -2,18 +2,18 @@ import type { POI, City, RouteType, OverpassElement } from '../types'
 
 const OVERPASS_BASE = 'https://overpass-api.de/api/interpreter'
 
-// POIs needed per route type (approximate, adjusted by duration)
+// Candidate POIs to fetch per duration (optimizer selects the best subset)
 const POIS_BY_DURATION: Record<number, number> = {
-  60: 4,
-  120: 7,
-  180: 10,
-  240: 13,
-  480: 20
+  60: 12,
+  120: 20,
+  180: 25,
+  240: 30,
+  480: 40
 }
 
 // Overpass tag queries per route type
 function buildOverpassQuery(city: City, routeType: RouteType): string {
-  const radius = 3000 // 3km radius from city center
+  const radius = 5000 // 5km radius for broader candidate coverage
   const lat = city.lat
   const lon = city.lon
 
@@ -190,26 +190,42 @@ function elementToCategory(element: OverpassElement, routeType: RouteType): stri
 }
 
 function estimateVisitTime(routeType: RouteType, category: string): number {
-  // Minutes to spend at each POI
-  const base: Record<RouteType, number> = {
-    imprescindibles: 25,
-    secretos_locales: 15,
-    monumental: 20,
-    historia_negra: 15,
-    curiosidades: 10,
-    gastronomia: 45,
-    arquitectura: 15,
-    naturaleza: 25
+  const cat = category.toLowerCase()
+
+  // Quick exterior stops — a look, photo, reading a plaque
+  if (/statue|fountain|memorial|milestone|wayside|fuente|estatua|escultura/.test(cat)) return 8
+  if (/viewpoint|mirador/.test(cat)) return 10
+  if (/artwork|mural|obra de arte/.test(cat)) return 8
+  if (/monument|monumento/.test(cat)) return 12
+  if (/bridge|puente|square|plaza/.test(cat)) return 10
+  if (/cemetery|cementerio/.test(cat)) return 12
+
+  // Medium stops — walk around, read context, appreciate details
+  if (/cathedral|catedral|basílica|basilica/.test(cat)) return 20
+  if (/church|iglesia|chapel|capilla/.test(cat)) return 15
+  if (/palace|palacio|castle|castillo/.test(cat)) return 20
+  if (/ruins|ruinas|archaeological/.test(cat)) return 15
+  if (/park|parque/.test(cat)) return 18
+  if (/garden|jardín/.test(cat)) return 15
+  if (/market|mercado/.test(cat)) return 25
+  if (/theatre|teatro|university|universidad/.test(cat)) return 12
+
+  // Longer interior visits
+  if (/museum|museo/.test(cat)) return 40
+  if (/restaurant|restaurante/.test(cat)) return 45
+  if (/bar|cafe|cafetería/.test(cat)) return 35
+
+  const defaults: Record<RouteType, number> = {
+    imprescindibles: 15,
+    secretos_locales: 10,
+    monumental: 15,
+    historia_negra: 10,
+    curiosidades: 8,
+    gastronomia: 30,
+    arquitectura: 12,
+    naturaleza: 15
   }
-
-  let time = base[routeType]
-  if (category.includes('museo') || category.includes('museum')) time = 60
-  if (category.includes('catedral') || category.includes('iglesia')) time = 25
-  if (category.includes('restaurante') || category.includes('bar')) time = 60
-  if (category.includes('mercado')) time = 30
-  if (category.includes('parque') || category.includes('jardín')) time = 30
-
-  return time
+  return defaults[routeType]
 }
 
 export async function getPOIsByCity(city: City, routeType: RouteType, maxDuration: number = 180): Promise<POI[]> {

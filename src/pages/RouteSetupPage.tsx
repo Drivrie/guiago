@@ -10,7 +10,8 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute } from '../services/routing'
+import { optimizeRouteByTimeBudget } from '../services/routeOptimizer'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
@@ -83,7 +84,8 @@ export function RouteSetupPage() {
     setAiRouteStory(null)
     setUsingAI(false)
 
-    const maxPOIs = Math.max(3, Math.min(12, Math.floor(selectedDuration / 20)))
+    // Fetch generous candidate pool; the optimizer selects the best subset within the time budget
+    const maxPOIs = Math.max(8, Math.min(30, Math.floor(selectedDuration / 8)))
     const visitedNames = avoidVisited ? getVisitedPOINames(selectedCity.id) : []
     const aiAvailable = hasAIKey(anthropicApiKey)
     const aiKey = getAIKey(anthropicApiKey)
@@ -204,8 +206,9 @@ export function RouteSetupPage() {
         return
       }
 
-      // Order POIs for optimal walking path
-      pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
+      // Select and order POIs using time-budget knapsack optimizer
+      const optimized = optimizeRouteByTimeBudget(pois, selectedDuration, selectedCity.lat, selectedCity.lon)
+      pois = optimized.pois
       setPOIs(pois)
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
@@ -426,8 +429,8 @@ export function RouteSetupPage() {
                 </p>
                 <p className="text-sm text-stone-500">
                   {language === 'es'
-                    ? `${selectedDuration === 480 ? 'Día completo' : selectedDuration === 240 ? 'Medio día' : `${selectedDuration / 60}h`} · ~${Math.floor(selectedDuration / 20)} paradas`
-                    : `${selectedDuration === 480 ? 'Full day' : selectedDuration === 240 ? 'Half day' : `${selectedDuration / 60}h`} · ~${Math.floor(selectedDuration / 20)} stops`}
+                    ? `${selectedDuration === 480 ? 'Día completo' : selectedDuration === 240 ? 'Medio día' : `${selectedDuration / 60}h`} · ~${Math.max(3, Math.floor(selectedDuration / 18))} paradas`
+                    : `${selectedDuration === 480 ? 'Full day' : selectedDuration === 240 ? 'Half day' : `${selectedDuration / 60}h`} · ~${Math.max(3, Math.floor(selectedDuration / 18))} stops`}
                 </p>
               </div>
             </div>
