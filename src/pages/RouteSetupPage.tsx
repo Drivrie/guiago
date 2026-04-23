@@ -10,7 +10,8 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute } from '../services/routing'
+import { planRoute } from '../services/routePlanner'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
@@ -204,8 +205,18 @@ export function RouteSetupPage() {
         return
       }
 
-      // Order POIs for optimal walking path
-      pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
+      // Run candidates through the route planner: budget-aware selection,
+      // category diversity, and 2-opt walking-path optimisation. The planner
+      // is a no-op when the AI path already returned an exact-fit list (we still
+      // benefit from 2-opt re-ordering).
+      pois = planRoute(pois, {
+        budgetMinutes: selectedDuration,
+        startLat: selectedCity.lat,
+        startLon: selectedCity.lon,
+        minStops: 3,
+        maxStops: Math.max(4, Math.min(15, Math.floor(selectedDuration / 18))),
+      })
+
       setPOIs(pois)
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
@@ -227,12 +238,12 @@ export function RouteSetupPage() {
             totalDuration += result.duration
           } else {
             // OSRM failed — use direct compass navigation as fallback
-            const direct = getDirectRoute(from, to)
+            const direct = getDirectRoute(from, to, language)
             const steps = getStepByStepInstructions(direct)
             segments.push({ from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
           }
         } catch {
-            const direct = getDirectRoute(from, to)
+            const direct = getDirectRoute(from, to, language)
             const steps = getStepByStepInstructions(direct)
             segments.push({ from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
         }

@@ -11,9 +11,29 @@ const POIS_BY_DURATION: Record<number, number> = {
   480: 20
 }
 
+/**
+ * Adaptive search radius based on city bounding box (approx city diameter).
+ * - Small towns (≤4 km wide): 2 km radius (avoids reaching neighbouring villages).
+ * - Medium cities (≤10 km): 3 km.
+ * - Large cities (>10 km, e.g. Paris, Madrid, Rome): 5 km to include outer
+ *   landmarks like Sacré-Cœur or El Retiro that fall outside a 3-km circle.
+ */
+function adaptiveRadius(city: City): number {
+  if (!city.boundingBox) return 3000
+  const [minLat, maxLat, minLon, maxLon] = city.boundingBox
+  // Rough diagonal in km (1° lat ≈ 111 km; lon scales by cos(lat))
+  const latKm = (maxLat - minLat) * 111
+  const lonKm = (maxLon - minLon) * 111 * Math.cos((city.lat * Math.PI) / 180)
+  const diag = Math.sqrt(latKm * latKm + lonKm * lonKm)
+  if (diag <= 4) return 2000
+  if (diag <= 10) return 3000
+  if (diag <= 20) return 4500
+  return 6000
+}
+
 // Overpass tag queries per route type
 function buildOverpassQuery(city: City, routeType: RouteType): string {
-  const radius = 3000 // 3km radius from city center
+  const radius = adaptiveRadius(city)
   const lat = city.lat
   const lon = city.lon
 
@@ -280,17 +300,13 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
       processedPOIs.push(poi)
     }
 
-    // Sort by importance (prefer elements with more tags/info)
-    processedPOIs.sort((a, b) => {
-      const scoreA = scorePOI(a)
-      const scoreB = scorePOI(b)
-      return scoreB - scoreA
-    })
+    // Sort by relevance and apply category diversity (avoid 10 churches in a row)
+    const scored = processedPOIs.map(p => ({ poi: p, score: scorePOI(p) }))
+    scored.sort((a, b) => b.score - a.score)
 
-    // Limit based on duration
     const maxPOIs = getPOICount(maxDuration)
-
-    return processedPOIs.slice(0, maxPOIs)
+    const diverse = pickDiverseTopPOIs(scored, maxPOIs)
+    return diverse
   } catch (error) {
     console.error('Error fetching POIs from Overpass:', error)
     return []
@@ -313,28 +329,136 @@ function extractWikiTitle(wikiTag: string): string {
   return wikiTag
 }
 
+/**
+ * Score an Overpass POI by tourist relevance.
+ * Higher = more emblematic / better documented.
+ *
+ * Heuristic combines:
+ *  - Documentation depth (wikipedia/wikidata link → strong signal of fame).
+ *  - Heritage / UNESCO / protected status.
+ *  - Category prior (cathedral > random church).
+ *  - Practical info (hours, website, accessibility).
+ *  - Negative penalties for vague/short names typical of low-quality entries.
+ */
 function scorePOI(poi: POI): number {
   let score = 0
   const tags = poi.tags || {}
 
-  if (tags.wikipedia) score += 10
-  if (tags.wikidata) score += 5
-  if (tags.website) score += 3
-  if (tags.opening_hours) score += 2
-  if (tags.phone) score += 1
-  if (tags['addr:street']) score += 1
-  if (tags.description) score += 3
-  if (tags.image) score += 2
+  // Strongest fame signal: linked to Wikipedia / Wikidata
+  if (tags.wikipedia) score += 25
+  if (tags.wikidata) score += 12
 
-  // Boost for certain types
-  if (['cathedral', 'palace', 'castle', 'museum'].includes(poi.category)) score += 10
-  if (['monument', 'ruins', 'archaeological_site'].includes(poi.category)) score += 7
+  // Heritage status (national protection, UNESCO list)
+  if (tags.heritage) score += 15
+  if (tags['heritage:operator'] === 'unesco' || tags['heritage:operator'] === 'whc') score += 30
+  if (tags['ref:whc']) score += 30  // WHC = World Heritage Centre id
+
+  // Tourism quality signals
+  if (tags.tourism === 'attraction') score += 6
+  if (tags.tourism === 'museum') score += 8
+  if (tags.tourism === 'viewpoint') score += 3
+  if (tags.tourism === 'artwork') score += 2
+
+  // Practical info (suggests it's a "real" curated POI)
+  if (tags.website || tags['contact:website']) score += 4
+  if (tags.opening_hours) score += 3
+  if (tags.image || tags.wikimedia_commons) score += 3
+  if (tags.description) score += 4
+  if (tags.phone || tags['contact:phone']) score += 1
+  if (tags['addr:street']) score += 1
+  if (tags.wheelchair) score += 1  // accessibility info → curated entry
+
+  // Architecture significance
+  if (tags['architecture:style'] || tags.architect) score += 6
+  if (tags['building:architecture']) score += 4
+
+  // Boost for emblematic categories
+  const cat = poi.category.toLowerCase()
+  if (/(catedral|cathedral|basílica|basilica|alhambra|alcázar|alcazar)/.test(cat)) score += 25
+  if (/(palacio|palace|castle|castillo)/.test(cat)) score += 18
+  if (/(museo|museum)/.test(cat)) score += 14
+  if (/(monumento|monument|ruins|archaeological)/.test(cat)) score += 12
+  if (/(mezquita|mosque|sinagoga|synagogue)/.test(cat)) score += 12
+  if (/(plaza|square|mercado|market)/.test(cat)) score += 8
+  if (/(torre|tower|puente|bridge)/.test(cat)) score += 6
+  if (/(iglesia|church|capilla|chapel)/.test(cat)) score += 4
+
+  // Penalties: vague, short or generic names
+  const name = poi.name.trim()
+  if (name.length < 4) score -= 5
+  if (/^(la |el |the )?(iglesia|church|capilla|chapel|fuente|fountain|estatua|statue)$/i.test(name)) score -= 8
+  if (!tags.wikipedia && !tags.wikidata && !tags.website && !tags.description) score -= 3
 
   return score
 }
 
 function getPOICount(durationMinutes: number): number {
   return POIS_BY_DURATION[durationMinutes] || Math.floor(durationMinutes / 15)
+}
+
+/**
+ * Bucket a category into a coarse "family" so we can enforce diversity.
+ * Returns one of: religious, museum, palace, square, market, garden, viewpoint,
+ *   monument, food, art, other
+ */
+function categoryFamily(category: string): string {
+  const c = category.toLowerCase()
+  if (/(catedral|basílica|iglesia|capilla|mezquita|sinagoga|convento|monasterio|chapel|church|mosque|synagogue|cathedral)/.test(c)) return 'religious'
+  if (/(museo|museum|galería|gallery)/.test(c)) return 'museum'
+  if (/(palacio|palace|castillo|castle|alcázar|alhambra|fortaleza|fort)/.test(c)) return 'palace'
+  if (/(plaza|square)/.test(c)) return 'square'
+  if (/(mercado|market)/.test(c)) return 'market'
+  if (/(jardín|garden|parque|park|natural|wood|water)/.test(c)) return 'garden'
+  if (/(mirador|viewpoint|torre|tower)/.test(c)) return 'viewpoint'
+  if (/(monumento|monument|memorial|estatua|statue|obelisco|fuente|fountain|puente|bridge)/.test(c)) return 'monument'
+  if (/(restaurante|restaurant|bar|cafetería|cafe|bakery|food)/.test(c)) return 'food'
+  if (/(obra de arte|artwork|sculpture|mural|graffiti)/.test(c)) return 'art'
+  return 'other'
+}
+
+/**
+ * Greedy diversity picker: walks the score-sorted list and keeps POIs while
+ * limiting consecutive picks of the same category family.
+ *
+ * Rule: no family may exceed ceil(targetCount / 3) picks until the pool is
+ * exhausted. This is permissive enough for "monumental" routes (where churches
+ * dominate) but prevents 10 cafés in "gastronomía".
+ */
+function pickDiverseTopPOIs<T extends { poi: POI; score: number }>(
+  scored: T[],
+  targetCount: number
+): POI[] {
+  if (scored.length <= targetCount) return scored.map(s => s.poi)
+
+  const familyCap = Math.max(2, Math.ceil(targetCount / 3))
+  const familyCount = new Map<string, number>()
+  const picked: POI[] = []
+  const skipped: POI[] = []  // overflow bucket if we run out before hitting target
+
+  for (const { poi } of scored) {
+    if (picked.length >= targetCount) break
+    const fam = categoryFamily(poi.category)
+    const used = familyCount.get(fam) || 0
+    if (used < familyCap) {
+      picked.push(poi)
+      familyCount.set(fam, used + 1)
+    } else {
+      skipped.push(poi)
+    }
+  }
+
+  // Backfill from skipped if we couldn't reach targetCount with diversity
+  for (const poi of skipped) {
+    if (picked.length >= targetCount) break
+    picked.push(poi)
+  }
+
+  return picked
+}
+
+/** Public scoring helper — used by the route planner to weight stops. */
+export function relevanceScore(poi: POI): number {
+  return scorePOI(poi)
 }
 
 export async function searchPOIsNearby(lat: number, lon: number, radius: number = 500): Promise<POI[]> {

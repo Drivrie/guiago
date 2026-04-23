@@ -168,7 +168,8 @@ export async function getRoute(waypoints: [number, number][], lang: 'es' | 'en' 
           modifier: step.maneuver.modifier,
           location: step.maneuver.location
         } : undefined,
-        geometry: step.geometry
+        geometry: step.geometry,
+        name: step.name,
       }))
     }))
 
@@ -199,7 +200,8 @@ export function getStepByStepInstructions(routeResult: RouteResult): NavigationS
         duration: step.duration.value,
         direction,
         icon: directionToIcon(direction),
-        coordinates: step.maneuver?.location
+        coordinates: step.maneuver?.location,
+        streetName: step.name?.trim() || undefined,
       })
     }
   }
@@ -207,44 +209,64 @@ export function getStepByStepInstructions(routeResult: RouteResult): NavigationS
   return steps
 }
 
-/** Creates a simple direct navigation segment when OSRM routing fails */
-export function getDirectRoute(from: { lat: number; lon: number }, to: { lat: number; lon: number }): RouteResult {
+/**
+ * Map a compass bearing to a cardinal name in the requested language.
+ * Used as a fallback when OSRM is unavailable so we can say "head south-east"
+ * instead of the absurd "make a U-turn" the previous bearing→direction mapping
+ * produced for any path heading vaguely southwards.
+ */
+function bearingToCardinal(bearingDeg: number, lang: 'es' | 'en'): string {
+  const sectors = lang === 'es'
+    ? ['norte', 'noreste', 'este', 'sureste', 'sur', 'suroeste', 'oeste', 'noroeste']
+    : ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west']
+  const idx = Math.round(bearingDeg / 45) % 8
+  return sectors[idx]
+}
+
+/**
+ * Creates a simple direct navigation segment when OSRM routing fails.
+ *
+ * Previously this function picked a turn-direction from the bearing alone
+ * (e.g. south → "u_turn"), which was meaningless without a known starting
+ * heading and produced confusing voice instructions. We now emit a single
+ * "head <cardinal>" step — the user can keep walking in that direction until
+ * either OSRM recovers or they reach the destination's geofence.
+ */
+export function getDirectRoute(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+  lang: 'es' | 'en' = 'es'
+): RouteResult {
   const dist = calculateDistance(from.lat, from.lon, to.lat, to.lon)
 
-  // Calculate bearing for direction arrow
-  const dLon = (to.lon - from.lon) * Math.PI / 180
-  const lat1 = from.lat * Math.PI / 180
-  const lat2 = to.lat * Math.PI / 180
+  const dLon = ((to.lon - from.lon) * Math.PI) / 180
+  const lat1 = (from.lat * Math.PI) / 180
+  const lat2 = (to.lat * Math.PI) / 180
   const y = Math.sin(dLon) * Math.cos(lat2)
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon)
-  const bearingDeg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+  const bearingDeg = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360
 
-  let direction: NavigationStep['direction'] = 'straight'
-  if (bearingDeg > 337.5 || bearingDeg <= 22.5) direction = 'straight'     // N
-  else if (bearingDeg <= 67.5) direction = 'slight_right'                    // NE
-  else if (bearingDeg <= 112.5) direction = 'right'                          // E
-  else if (bearingDeg <= 157.5) direction = 'right'                          // SE
-  else if (bearingDeg <= 202.5) direction = 'u_turn'                         // S
-  else if (bearingDeg <= 247.5) direction = 'left'                           // SW
-  else if (bearingDeg <= 292.5) direction = 'left'                           // W
-  else direction = 'slight_left'                                             // NW
+  const cardinal = bearingToCardinal(bearingDeg, lang)
+  const distText = dist > 500 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`
+  const instruction = lang === 'es'
+    ? `Dirígete hacia el ${cardinal} (${distText} hasta el destino)`
+    : `Head ${cardinal} (${distText} to destination)`
 
-  const instruction = `Dirígete ${dist > 500 ? `${(dist/1000).toFixed(1)} km` : `${Math.round(dist)} m`} hacia el destino`
-  const icon = direction === 'left' ? '↰' : direction === 'right' ? '↱' : '↑'
-
-  void icon // used indirectly via maneuver modifier in getStepByStepInstructions
+  const walkSeconds = dist / 1.4
   return {
     distance: dist,
-    duration: dist / 1.4,
+    duration: walkSeconds,
     geometry: { type: 'LineString', coordinates: [[from.lon, from.lat], [to.lon, to.lat]] },
     legs: [{
       distance: { value: dist, text: formatDistance(dist) },
-      duration: { value: dist / 1.4, text: `${Math.round(dist / 84)} min` },
+      duration: { value: walkSeconds, text: `${Math.round(walkSeconds / 60)} min` },
       steps: [{
         distance: { value: dist, text: formatDistance(dist) },
-        duration: { value: dist / 1.4, text: `${Math.round(dist / 84)} min` },
+        duration: { value: walkSeconds, text: `${Math.round(walkSeconds / 60)} min` },
         instruction,
-        maneuver: { type: 'depart', modifier: direction, location: [from.lon, from.lat] as [number, number] },
+        // 'depart' is the safe maneuver type — keeps the panel arrow as "↑" forward,
+        // which matches "follow the bearing" semantics far better than a turn arrow.
+        maneuver: { type: 'depart', modifier: 'straight', location: [from.lon, from.lat] as [number, number] },
         geometry: undefined,
       }]
     }]
@@ -276,36 +298,83 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
   return R * c
 }
 
-/** Builds a natural spoken instruction for TTS (more human than the display text) */
-export function buildVoiceInstruction(step: NavigationStep, lang: 'es' | 'en'): string {
+/**
+ * Builds a natural spoken instruction for TTS — more human than the display
+ * text. Optionally appends a "destination preview" when the next POI's name is
+ * known and the step ends close to it ("…and Sagrada Família will be on your
+ * left in 80 metres").
+ */
+export function buildVoiceInstruction(
+  step: NavigationStep,
+  lang: 'es' | 'en',
+  context?: { streetName?: string; arrivingAt?: string }
+): string {
   const dist = step.distance
   const distStr = dist < 50 ? '' : dist < 1000
     ? (lang === 'es' ? `en ${Math.round(dist / 10) * 10} metros` : `in ${Math.round(dist / 10) * 10} meters`)
     : (lang === 'es' ? `en ${(dist / 1000).toFixed(1)} kilómetros` : `in ${(dist / 1000).toFixed(1)} kilometers`)
 
+  // Street name suffix for richer turn instructions ("turn left onto Gran Vía")
+  const street = context?.streetName?.trim()
+  const onStreet = street ? (lang === 'es' ? ` por ${street}` : ` onto ${street}`) : ''
+
+  let core: string
   if (lang === 'es') {
     switch (step.direction) {
-      case 'arrive': return 'Has llegado a tu destino.'
-      case 'straight': return distStr ? `Continúa recto ${distStr}.` : 'Continúa recto.'
-      case 'left': return distStr ? `${distStr}, gira a la izquierda.` : 'Gira a la izquierda.'
-      case 'right': return distStr ? `${distStr}, gira a la derecha.` : 'Gira a la derecha.'
-      case 'slight_left': return distStr ? `${distStr}, gira ligeramente a la izquierda.` : 'Gira ligeramente a la izquierda.'
-      case 'slight_right': return distStr ? `${distStr}, gira ligeramente a la derecha.` : 'Gira ligeramente a la derecha.'
-      case 'u_turn': return 'Da la vuelta cuando puedas.'
-      default: return step.instruction
+      case 'arrive':
+        core = context?.arrivingAt
+          ? `Has llegado a ${context.arrivingAt}.`
+          : 'Has llegado a tu destino.'
+        break
+      case 'straight': core = distStr ? `Continúa recto ${distStr}${onStreet}.` : `Continúa recto${onStreet}.`; break
+      case 'left': core = distStr ? `${distStr}, gira a la izquierda${onStreet}.` : `Gira a la izquierda${onStreet}.`; break
+      case 'right': core = distStr ? `${distStr}, gira a la derecha${onStreet}.` : `Gira a la derecha${onStreet}.`; break
+      case 'slight_left': core = distStr ? `${distStr}, gira ligeramente a la izquierda${onStreet}.` : `Gira ligeramente a la izquierda${onStreet}.`; break
+      case 'slight_right': core = distStr ? `${distStr}, gira ligeramente a la derecha${onStreet}.` : `Gira ligeramente a la derecha${onStreet}.`; break
+      case 'u_turn': core = 'Da la vuelta cuando puedas.'; break
+      default: core = step.instruction
     }
   } else {
     switch (step.direction) {
-      case 'arrive': return "You've arrived at your destination."
-      case 'straight': return distStr ? `Continue straight ${distStr}.` : 'Continue straight.'
-      case 'left': return distStr ? `${distStr}, turn left.` : 'Turn left.'
-      case 'right': return distStr ? `${distStr}, turn right.` : 'Turn right.'
-      case 'slight_left': return distStr ? `${distStr}, turn slightly left.` : 'Turn slightly left.'
-      case 'slight_right': return distStr ? `${distStr}, turn slightly right.` : 'Turn slightly right.'
-      case 'u_turn': return 'Make a U-turn when safe.'
-      default: return step.instruction
+      case 'arrive':
+        core = context?.arrivingAt
+          ? `You've arrived at ${context.arrivingAt}.`
+          : "You've arrived at your destination."
+        break
+      case 'straight': core = distStr ? `Continue straight ${distStr}${onStreet}.` : `Continue straight${onStreet}.`; break
+      case 'left': core = distStr ? `${distStr}, turn left${onStreet}.` : `Turn left${onStreet}.`; break
+      case 'right': core = distStr ? `${distStr}, turn right${onStreet}.` : `Turn right${onStreet}.`; break
+      case 'slight_left': core = distStr ? `${distStr}, turn slightly left${onStreet}.` : `Turn slightly left${onStreet}.`; break
+      case 'slight_right': core = distStr ? `${distStr}, turn slightly right${onStreet}.` : `Turn slightly right${onStreet}.`; break
+      case 'u_turn': core = 'Make a U-turn when safe.'; break
+      default: core = step.instruction
     }
   }
+
+  // Destination teaser: "…and you'll see Sagrada Família at the end of the street"
+  if (step.direction === 'arrive' && context?.arrivingAt) {
+    return core
+  }
+
+  return core
+}
+
+/**
+ * Builds a one-line "anticipation teaser" pronounced when the visitor is ~50-100 m
+ * from the next POI but before they actually arrive. Designed to be spoken once
+ * per POI; the caller is expected to dedupe.
+ */
+export function buildArrivalTeaser(
+  poiName: string,
+  category: string,
+  distanceMeters: number,
+  lang: 'es' | 'en'
+): string {
+  const dist = Math.max(20, Math.round(distanceMeters / 10) * 10)
+  if (lang === 'es') {
+    return `Atento, en unos ${dist} metros tendrás delante ${poiName}. Tómate un momento al llegar.`
+  }
+  return `Heads up — in about ${dist} metres you'll be standing in front of ${poiName}. Take a moment when you arrive.`
 }
 
 export function estimateWalkingTime(distanceMeters: number): number {
@@ -313,44 +382,5 @@ export function estimateWalkingTime(distanceMeters: number): number {
   return Math.round(distanceMeters / 84)
 }
 
-export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
-  pois: T[],
-  startLat?: number,
-  startLon?: number
-): T[] {
-  if (pois.length <= 2) return pois
-
-  const unvisited = [...pois]
-  const ordered: T[] = []
-
-  // Start from first POI or given start position
-  let currentLat = startLat ?? pois[0].lat
-  let currentLon = startLon ?? pois[0].lon
-
-  if (!startLat) {
-    ordered.push(unvisited.splice(0, 1)[0])
-    currentLat = ordered[0].lat
-    currentLon = ordered[0].lon
-  }
-
-  // Nearest neighbor algorithm
-  while (unvisited.length > 0) {
-    let nearestIdx = 0
-    let nearestDist = Infinity
-
-    for (let i = 0; i < unvisited.length; i++) {
-      const dist = calculateDistance(currentLat, currentLon, unvisited[i].lat, unvisited[i].lon)
-      if (dist < nearestDist) {
-        nearestDist = dist
-        nearestIdx = i
-      }
-    }
-
-    const nearest = unvisited.splice(nearestIdx, 1)[0]
-    ordered.push(nearest)
-    currentLat = nearest.lat
-    currentLon = nearest.lon
-  }
-
-  return ordered
-}
+// Walking-path ordering moved to routePlanner.ts (orderForWalking) which adds
+// 2-opt refinement on top of the previous nearest-neighbour heuristic.

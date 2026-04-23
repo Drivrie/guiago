@@ -32,17 +32,93 @@ function cleanHtml(html: string): string {
     .replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * Scores a Wikipedia article by tourist relevance for a given route type.
+ *
+ * Components:
+ *  - Keyword density for the chosen route theme (e.g. "barroco" for arquitectura).
+ *  - "Notoriety" bonus when the lede screams emblematic/iconic/UNESCO.
+ *  - Length bonus — long articles are usually about important landmarks.
+ *  - Negative penalty for street-furniture noise (street, traffic light, bus stop).
+ */
 function scoreArticle(title: string, extract: string, routeType: RouteType): number {
-  const text = `${title} ${extract.slice(0, 400)}`
-  if (routeType === 'imprescindibles') {
-    // Score highest overall landmark coverage
-    const allMatches = (text.match(ALL_KEYWORDS_RE) || []).length
-    // Bonus for "famous/emblematic" language
-    const notorietyBonus = /turístico|famoso|emblemático|icónico|símbolo|principal|destacad|patrimonio|unesco|known for|famous/i.test(text) ? 3 : 0
-    return allMatches + notorietyBonus
+  const text = `${title} ${extract.slice(0, 600)}`
+
+  // Penalize noisy article types (street names, bus stops, schools, etc.)
+  if (/^(calle|avenida|paseo|carretera|plaza|street|avenue|road|highway|estación de|station of)\b/i.test(title)) {
+    if (!/famosa|famoso|emblemática|emblemático|icónica|icónico|monumental|historic/i.test(extract.slice(0, 300))) {
+      return -1
+    }
   }
-  const re = new RegExp(ROUTE_KEYWORDS[routeType].source, 'gi')
-  return (text.match(re) || []).length
+  if (/(parada de autobús|bus stop|colegio|escuela|school|hospital|farmacia|pharmacy)/i.test(title)) return -1
+
+  let score: number
+
+  if (routeType === 'imprescindibles') {
+    const allMatches = (text.match(ALL_KEYWORDS_RE) || []).length
+    score = allMatches
+  } else {
+    const re = new RegExp(ROUTE_KEYWORDS[routeType].source, 'gi')
+    score = (text.match(re) || []).length
+  }
+
+  // Notoriety boost — strong tourist-relevance signals in the lede
+  if (/(unesco|patrimonio de la humanidad|world heritage)/i.test(text)) score += 6
+  if (/(emblemático|icónico|principal|símbolo|landmark|iconic)/i.test(text)) score += 3
+  if (/(más visitad|most visited|famous for|famoso por)/i.test(text)) score += 3
+  if (/\bsiglo (xv|xvi|xvii|xviii|xix|xx|xxi|i{1,3})\b/i.test(text)) score += 1  // historical depth
+
+  // Article-length proxy: longer extract = usually more important article
+  if (extract.length > 400) score += 1
+  if (extract.length > 800) score += 2
+
+  return score
+}
+
+/** Coarse category family for diversity capping (mirrors overpass.ts). */
+function familyOf(category: string): string {
+  const c = category.toLowerCase()
+  if (/(catedral|basílica|iglesia|capilla|mezquita|sinagoga|convento|monasterio|cathedral|church|chapel|mosque|synagogue)/.test(c)) return 'religious'
+  if (/(museo|museum)/.test(c)) return 'museum'
+  if (/(palacio|palace|castillo|castle|alcázar|alhambra|fortaleza)/.test(c)) return 'palace'
+  if (/(plaza|square)/.test(c)) return 'square'
+  if (/(mercado|market)/.test(c)) return 'market'
+  if (/(jardín|garden|parque|park)/.test(c)) return 'garden'
+  if (/(mirador|viewpoint|torre|tower)/.test(c)) return 'viewpoint'
+  if (/(monumento|monument|memorial|estatua|statue|fuente|fountain|puente|bridge)/.test(c)) return 'monument'
+  return 'other'
+}
+
+/**
+ * Greedy diversity picker — same shape as the one in overpass.ts but operating
+ * on the wiki-scored objects. Caps each family to ~⅓ of the target so the route
+ * doesn't degenerate into "10 churches" when the user asked for "imprescindibles".
+ */
+function pickDiverseByFamily<T extends { category: string }>(
+  pool: T[],
+  target: number
+): T[] {
+  if (pool.length <= target) return pool
+  const cap = Math.max(2, Math.ceil(target / 3))
+  const used = new Map<string, number>()
+  const picked: T[] = []
+  const overflow: T[] = []
+  for (const item of pool) {
+    if (picked.length >= target) break
+    const fam = familyOf(item.category)
+    const n = used.get(fam) || 0
+    if (n < cap) {
+      picked.push(item)
+      used.set(fam, n + 1)
+    } else {
+      overflow.push(item)
+    }
+  }
+  for (const item of overflow) {
+    if (picked.length >= target) break
+    picked.push(item)
+  }
+  return picked
 }
 
 function guessCategory(title: string, extract: string, routeType: RouteType): string {
@@ -90,13 +166,18 @@ export async function searchPOIsWikipedia(
     const base = WIKI_API[wikiLang]
     const excludeLower = excludeNames.map(n => n.toLowerCase())
 
+    // Adaptive radius: large cities (París, Roma) need wider geosearch to catch
+    // outer landmarks (Sacré-Cœur, El Retiro). Small towns need a tight radius
+    // to avoid leaking into neighbouring villages.
+    const gsRadius = adaptiveGeoRadius(city)
+
     // Step 1: Geosearch around city center
     const geoParams = new URLSearchParams({
       action: 'query',
       list: 'geosearch',
       gscoord: `${city.lat}|${city.lon}`,
-      gsradius: '3000',
-      gslimit: '50',
+      gsradius: String(gsRadius),
+      gslimit: '60',
       format: 'json',
       origin: '*',
     })
@@ -160,16 +241,36 @@ export async function searchPOIsWikipedia(
       })
     }
 
-    // Step 4: Sort by relevance, use all if too few scored
+    // Sort by relevance and apply category-family diversity (same heuristic as
+    // the OSM path) so a single dominant family (e.g. churches) doesn't take all
+    // slots and we mix in plazas/museums/markets when the user asked for variety.
     scored.sort((a, b) => b._score - a._score)
     const relevant = scored.filter(p => p._score > 0)
-    const result = relevant.length >= 3 ? relevant : scored
+    const pool = relevant.length >= 3 ? relevant : scored
 
-    return result.slice(0, maxPOIs).map(({ _score: _, ...poi }) => poi)
+    // Stash score on tags so the planner can later weight value vs. cost.
+    const diverse = pickDiverseByFamily(pool, maxPOIs)
+    return diverse.map(({ _score, ...poi }) => ({
+      ...poi,
+      tags: { ...(poi.tags || {}), _score: String(_score) },
+    }))
   } catch (err) {
     console.error('wikigeo error:', err)
     return []
   }
+}
+
+/** Adaptive Wikipedia geosearch radius (m), inferred from the city bbox. */
+function adaptiveGeoRadius(city: City): number {
+  if (!city.boundingBox) return 3000
+  const [minLat, maxLat, minLon, maxLon] = city.boundingBox
+  const latKm = (maxLat - minLat) * 111
+  const lonKm = (maxLon - minLon) * 111 * Math.cos((city.lat * Math.PI) / 180)
+  const diag = Math.sqrt(latKm * latKm + lonKm * lonKm)
+  if (diag <= 4) return 2500
+  if (diag <= 10) return 4000  // Wikipedia caps geosearch at 10000 m
+  if (diag <= 20) return 7000
+  return 10000
 }
 
 // Maximum distance (in degrees) a POI can be from the city centre to be accepted.

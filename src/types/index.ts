@@ -55,6 +55,8 @@ export interface NavigationStep {
   direction?: 'straight' | 'left' | 'right' | 'slight_left' | 'slight_right' | 'u_turn' | 'arrive'
   coordinates?: [number, number]
   icon?: string
+  /** Street name parsed from OSRM (when available). Empty for unnamed paths. */
+  streetName?: string
 }
 
 export interface RouteSegment {
@@ -153,6 +155,7 @@ export interface RouteResult {
       geometry?: {
         coordinates: [number, number][]
       }
+      name?: string
     }>
   }>
 }

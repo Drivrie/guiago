@@ -7,18 +7,20 @@ import { NavigationPanel } from '../components/NavigationPanel'
 import { BottomSheet } from '../components/ui/BottomSheet'
 import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
-import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
+import { getPOIInfoMultiSource, generateAudioScript } from '../services/wikipedia'
 import { getAudioScript } from '../services/storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
+import { getRoute, getStepByStepInstructions, calculateDistance, getDirectRoute, buildVoiceInstruction, buildArrivalTeaser } from '../services/routing'
+import { orderForWalking } from '../services/routePlanner'
+import { getQidFromWikipedia, getPOIFacts, formatFactsheet } from '../services/wikidata'
 import { speak, stop as stopTTS } from '../services/tts'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
 type GuidePhase = 'selecting_start' | 'ready_to_start' | 'navigating' | 'at_poi' | 'post_poi' | 'complete'
 
-function fallbackSegment(from: POI, to: POI): RouteSegment {
-  const direct = getDirectRoute(from, to)
+function fallbackSegment(from: POI, to: POI, lang: 'es' | 'en' = 'es'): RouteSegment {
+  const direct = getDirectRoute(from, to, lang)
   const steps = getStepByStepInstructions(direct)
   return { from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] }
 }
@@ -48,6 +50,10 @@ export function ActiveRoutePage() {
   const [navigateToInput, setNavigateToInput] = useState('')
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
+  /** POI id we've already teased before arrival — prevents re-announcing on every GPS tick. */
+  const teasedPOIRef = useRef<string | null>(null)
+  /** POI id whose Wikidata facts we've already enriched — prevents repeat fetches. */
+  const enrichedPOIRef = useRef<string | null>(null)
 
   const currentPOI = pois[currentPOIIndex]
   const nextPOIObj = pois[currentPOIIndex + 1] || null
@@ -99,11 +105,21 @@ export function ActiveRoutePage() {
     }
   }, [phase])
 
-  // ---- GPS arrival detection (30m auto-arrive) ----
+  // ---- GPS arrival detection (30m auto-arrive) + arrival teaser at ~80m ----
   useEffect(() => {
     if (phase !== 'navigating' || !userLocation || !currentPOI) return
     const dist = calculateDistance(userLocation[0], userLocation[1], currentPOI.lat, currentPOI.lon)
     setDistanceToPOI(Math.round(dist))
+
+    // Anticipation teaser: when 60–110 m away, give the visitor a heads-up so
+    // they know what to look for before they arrive. Spoken at most once per POI.
+    if (dist > 60 && dist < 110 && !voiceMuted && teasedPOIRef.current !== currentPOI.id) {
+      teasedPOIRef.current = currentPOI.id
+      const teaser = buildArrivalTeaser(currentPOI.name, currentPOI.category, dist, language)
+      // Defer so it doesn't collide with a turn instruction being spoken right now
+      setTimeout(() => speak(teaser, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.0 }), 200)
+    }
+
     if (dist < 30) {
       setInPreRoute(false)
       setPreRouteSegment(null)
@@ -127,13 +143,24 @@ export function ActiveRoutePage() {
   }, [userLocation, phase, navSteps, currentStepIndex])
 
   // ---- Voice navigation: speak instruction when step changes ----
+  // Builds richer voice line by passing the OSRM street name and the destination
+  // POI name on the final step ("…and you'll arrive at Sagrada Família").
   useEffect(() => {
     if (phase !== 'navigating' || voiceMuted || !currentNavStep) return
     if (currentStepIndex === lastSpokenStepRef.current) return
     lastSpokenStepRef.current = currentStepIndex
-    const text = buildVoiceInstruction(currentNavStep, language)
+    const isLastStep = currentStepIndex === navSteps.length - 1
+    const text = buildVoiceInstruction(currentNavStep, language, {
+      streetName: currentNavStep.streetName,
+      arrivingAt: isLastStep ? currentPOI?.name : undefined,
+    })
     speak(text, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
   }, [currentStepIndex, phase, voiceMuted])
+
+  // ---- Reset arrival teaser tracking when POI changes ----
+  useEffect(() => {
+    teasedPOIRef.current = null
+  }, [currentPOIIndex])
 
   // ---- Mark current POI as visited when arriving (at_poi phase) ----
   useEffect(() => {
@@ -141,31 +168,50 @@ export function ActiveRoutePage() {
     markPOIsVisited(currentRoute.city.id, [currentPOI.name])
   }, [phase, currentPOI?.id])
 
-  // ---- Load audio when entering at_poi (AI-enhanced when key available) ----
+  // ---- Load audio when entering at_poi (multi-source: Wikipedia + Wikivoyage
+  //      + Wikidata structured facts → AI-enhanced narration when key available) ----
   useEffect(() => {
     if (phase !== 'at_poi' || !currentPOI) return
     setAudioLoading(true)
     setAudioScript('')
 
     async function loadAudio() {
-      // 1. Try offline cache first
+      // 1. Try offline cache first (no network needed)
       const cached = await getAudioScript(currentPOI!.id, language)
       if (cached) { setAudioScript(cached); setAudioLoading(false); return }
 
-      // 2. Fetch Wikipedia description
-      const desc = await getPOIDescription(currentPOI!.name, language)
+      // 2. Multi-source description: Wikipedia + Wikivoyage in parallel.
+      //    Wikipedia gives history; Wikivoyage adds practical visitor tips.
+      const wikiInfo = await getPOIInfoMultiSource(currentPOI!.name, language)
+      let desc = wikiInfo?.extract || ''
 
-      // 3. If AI key available (built-in or user), use Mistral for professional narration
+      // 3. Wikidata enrichment: structured facts (year, architect, style, UNESCO,
+      //    height) prepended as a factsheet so AI can ground the narration in
+      //    verifiable specifics rather than generic prose.
+      if (currentPOI!.id !== enrichedPOIRef.current) {
+        enrichedPOIRef.current = currentPOI!.id
+        const qid = currentPOI!.tags?.wikidata
+          || (wikiInfo?.title ? await getQidFromWikipedia(wikiInfo.title, language) : null)
+        if (qid) {
+          const facts = await getPOIFacts(qid, language)
+          if (facts) {
+            const sheet = formatFactsheet(facts, language)
+            if (sheet) desc = `${sheet}. ${desc}`
+          }
+        }
+      }
+
+      // 4. If AI key available (built-in or user), use Mistral for professional narration
       if (hasAIKey(anthropicApiKey)) {
         const insiderTip = currentPOI!.tags?.['insiderTip'] || undefined
         const reason = currentPOI!.shortDescription || ''
         const aiScript = await generateAIAudioScript(
-          currentPOI!.name, currentPOI!.category, desc || '', reason, insiderTip, language, getAIKey(anthropicApiKey)
+          currentPOI!.name, currentPOI!.category, desc, reason, insiderTip, language, getAIKey(anthropicApiKey)
         )
         if (aiScript) { setAudioScript(aiScript); setAudioLoading(false); return }
       }
 
-      // 4. Fallback to template-based script
+      // 5. Fallback to template-based script (still benefits from the enriched desc)
       setAudioScript(generateAudioScript(
         { name: currentPOI!.name, category: currentPOI!.category, description: desc || undefined },
         language
@@ -238,7 +284,8 @@ export function ActiveRoutePage() {
   async function reorderAndStart(startLat: number, startLon: number) {
     if (!currentRoute) return
     setRebuilding(true)
-    const orderedPOIs = orderPOIsOptimally([...pois], startLat, startLon)
+    // 2-opt walking-path optimisation (replaces nearest-neighbour-only)
+    const orderedPOIs = orderForWalking([...pois], startLat, startLon)
 
     // Build pre-route: from user start position → first POI
     const firstPOI = orderedPOIs[0]
@@ -247,7 +294,7 @@ export function ActiveRoutePage() {
     if (distToFirst > 50) {
       try {
         const result = await getRoute([[startLat, startLon], [firstPOI.lat, firstPOI.lon]], language)
-        const routeData = result ?? getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
+        const routeData = result ?? getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon }, language)
         preRoute = {
           from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
           to: firstPOI,
@@ -257,7 +304,7 @@ export function ActiveRoutePage() {
           geometry: routeData.geometry.coordinates,
         }
       } catch {
-        const direct = getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
+        const direct = getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon }, language)
         preRoute = {
           from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
           to: firstPOI,
@@ -284,10 +331,10 @@ export function ActiveRoutePage() {
             geometry: result.geometry.coordinates
           })
         } else {
-          segments.push(fallbackSegment(orderedPOIs[i], orderedPOIs[i + 1]))
+          segments.push(fallbackSegment(orderedPOIs[i], orderedPOIs[i + 1], language))
         }
       } catch {
-        segments.push(fallbackSegment(orderedPOIs[i], orderedPOIs[i + 1]))
+        segments.push(fallbackSegment(orderedPOIs[i], orderedPOIs[i + 1], language))
       }
     }
     setPOIs(orderedPOIs)
