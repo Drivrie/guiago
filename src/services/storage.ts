@@ -2,13 +2,17 @@ import { openDB, type IDBPDatabase } from 'idb'
 import type { Route } from '../types'
 
 const DB_NAME = 'guiago-db'
-const DB_VERSION = 1
+// v2 adds the `wikidata_facts` store for structured POI enrichment caching
+// (architect, year, style, UNESCO status…). Keyed by `${qid}-${lang}` so we
+// share cache entries for the same Wikidata entity across cities.
+const DB_VERSION = 2
 
 const STORES = {
   ROUTES: 'routes',
   AUDIO_SCRIPTS: 'audio_scripts',
   POI_DESCRIPTIONS: 'poi_descriptions',
-  CITY_DATA: 'city_data'
+  CITY_DATA: 'city_data',
+  WIKIDATA_FACTS: 'wikidata_facts'
 } as const
 
 type GuiAgoDBSchema = {
@@ -27,6 +31,10 @@ type GuiAgoDBSchema = {
   city_data: {
     key: string
     value: { id: string; data: unknown; updatedAt: string }
+  }
+  wikidata_facts: {
+    key: string
+    value: { id: string; facts: unknown; lang: string; fetchedAt: string }
   }
 }
 
@@ -55,6 +63,11 @@ async function getDB(): Promise<IDBPDatabase<GuiAgoDBSchema>> {
       // City data store
       if (!db.objectStoreNames.contains(STORES.CITY_DATA)) {
         db.createObjectStore(STORES.CITY_DATA, { keyPath: 'id' })
+      }
+
+      // Wikidata facts cache (added in v2)
+      if (!db.objectStoreNames.contains(STORES.WIKIDATA_FACTS)) {
+        db.createObjectStore(STORES.WIKIDATA_FACTS, { keyPath: 'id' })
       }
     }
   })
@@ -145,6 +158,47 @@ export async function getCityData(cityId: string): Promise<unknown> {
   return item?.data ?? null
 }
 
+// ---------------------------------------------------------------------------
+// Wikidata facts cache
+// ---------------------------------------------------------------------------
+// TTL: 30 days. Wikidata facts (year built, architect, UNESCO status…) change
+// rarely; a month is a good balance between freshness and avoiding repeat
+// SPARQL round-trips on every POI load. Stale entries return null so the
+// caller refetches transparently.
+const WIKIDATA_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+export async function saveWikidataFacts(
+  qid: string,
+  facts: unknown,
+  lang: string = 'es'
+): Promise<void> {
+  if (!qid) return
+  const db = await getDB()
+  await db.put(STORES.WIKIDATA_FACTS, {
+    id: `${qid}-${lang}`,
+    facts,
+    lang,
+    fetchedAt: new Date().toISOString(),
+  })
+}
+
+export async function getCachedWikidataFacts<T = unknown>(
+  qid: string,
+  lang: string = 'es'
+): Promise<T | null> {
+  if (!qid) return null
+  try {
+    const db = await getDB()
+    const entry = await db.get(STORES.WIKIDATA_FACTS, `${qid}-${lang}`)
+    if (!entry) return null
+    const age = Date.now() - new Date(entry.fetchedAt).getTime()
+    if (age > WIKIDATA_TTL_MS) return null
+    return entry.facts as T
+  } catch {
+    return null
+  }
+}
+
 // Storage utilities
 export async function checkStorageAvailable(): Promise<boolean> {
   try {
@@ -175,7 +229,8 @@ export async function clearAllData(): Promise<void> {
     db.clear(STORES.ROUTES),
     db.clear(STORES.AUDIO_SCRIPTS),
     db.clear(STORES.POI_DESCRIPTIONS),
-    db.clear(STORES.CITY_DATA)
+    db.clear(STORES.CITY_DATA),
+    db.clear(STORES.WIKIDATA_FACTS)
   ])
 }
 
