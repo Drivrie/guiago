@@ -1,4 +1,6 @@
-export type Language = 'es' | 'en'
+export type Language = 'es' | 'en' | 'pl' | 'de' | 'fr' | 'it' | 'pt' | 'ru' | string
+
+export type CountryCode = string
 
 export type RouteType =
   | 'imprescindibles'
@@ -11,6 +13,8 @@ export type RouteType =
   | 'naturaleza'
 
 export type RouteDuration = 60 | 120 | 180 | 240 | 480
+
+export interface Coordinates { lat: number; lon: number }
 
 export interface City {
   id: string
@@ -97,7 +101,7 @@ export interface WikiResult {
   title: string
   extract: string
   imageUrl?: string
-  url?: string
+  url: string
 }
 
 export interface NominatimResult {

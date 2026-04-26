@@ -61,14 +61,12 @@ export async function searchCities(query: string, lang: string = 'es'): Promise<
 
     const data: NominatimResult[] = await response.json()
 
-    // Filter to only cities/towns/municipalities and remove duplicates
     const seen = new Set<string>()
     const cities: City[] = []
 
     for (const result of data) {
       if (!['city', 'town', 'village', 'municipality', 'administrative'].includes(result.type) &&
           !['city', 'town', 'village', 'municipality'].includes(result.class)) {
-        // Allow administrative places too
         if (result.class !== 'place' && result.class !== 'boundary') continue
       }
 
@@ -139,5 +137,14 @@ export async function getCityImageUrl(cityName: string): Promise<string | null> 
     return page?.thumbnail?.source || null
   } catch {
     return null
+  }
+}
+
+export async function validatePOILocation(poiName: string, city: City): Promise<boolean> {
+  try {
+    const results = await searchCities(`${poiName}, ${city.name}, ${city.country}`)
+    return results.some(r => r.name.toLowerCase() === city.name.toLowerCase())
+  } catch {
+    return false
   }
 }

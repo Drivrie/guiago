@@ -1,3 +1,5 @@
+import type { Language } from '../types'
+
 type TTSLang = 'es-ES' | 'en-US'
 
 let currentRate = 1.0
@@ -194,6 +196,94 @@ export const SPEED_OPTIONS = [
   { label: '1.2x', value: 1.2 },
   { label: '1.5x', value: 1.5 }
 ]
+
+// --- Tour guide audio script generation ---
+
+export function generateAudioScript(
+  poi: { name: string; category: string; description?: string; tags?: Record<string, string> },
+  lang: Language
+): string {
+  const { name, category, description = '', tags = {} } = poi
+  const isHistorical = /catedral|castillo|palacio|museo|monumento/i.test(category)
+  const isGastronomy = /restaurante|mercado|bar|taberna/i.test(category)
+  const isNature = /parque|jardín|naturaleza/i.test(category)
+
+  type LangKey = 'es' | 'en'
+  const safeLang: LangKey = (lang === 'en') ? 'en' : 'es'
+
+  const openings: Record<string, Record<LangKey, string[]>> = {
+    historical: {
+      es: [
+        `Estás frente a ${name}, un ${category} con más de ${tags.year || 'varios siglos'} de historia.`,
+        `Aquí tienes ${name}, uno de los ${category} más importantes de ${tags.city || 'esta ciudad'}.`,
+        `Bienvenido a ${name}, un lugar que ha sido testigo de ${tags.historicalEvent || 'grandes eventos históricos'}.`,
+      ],
+      en: [
+        `You are now in front of ${name}, a ${category} with over ${tags.year || 'centuries'} of history.`,
+        `Here is ${name}, one of the most important ${category} in ${tags.city || 'this city'}.`,
+        `Welcome to ${name}, a place that has witnessed ${tags.historicalEvent || 'great historical events'}.`,
+      ],
+    },
+    gastronomy: {
+      es: [
+        `Llegamos a ${name}, un lugar ideal para probar la gastronomía local.`,
+        `Aquí tienes ${name}, famoso por sus platos tradicionales como ${tags.specialty || 'las delicias de la región'}.`,
+      ],
+      en: [
+        `We arrive at ${name}, a perfect place to try local cuisine.`,
+        `Here is ${name}, famous for its traditional dishes like ${tags.specialty || 'local delicacies'}.`,
+      ],
+    },
+    nature: {
+      es: [
+        `Ahora estás en ${name}, un espacio natural lleno de vida y belleza.`,
+        `Disfruta de ${name}, un lugar perfecto para conectar con la naturaleza.`,
+      ],
+      en: [
+        `Now you are at ${name}, a natural space full of life and beauty.`,
+        `Enjoy ${name}, a perfect place to connect with nature.`,
+      ],
+    },
+    default: {
+      es: [`Ahora estás en ${name}, un lugar interesante para explorar.`],
+      en: [`Now you are at ${name}, an interesting place to explore.`],
+    },
+  }
+
+  const closings: Record<LangKey, string[]> = {
+    es: [
+      'Tómate tu tiempo para explorar. Cuando estés listo, seguiremos.',
+      'Disfruta del lugar. Avisa cuando quieras continuar.',
+      'Quédate un momento, que este sitio lo merece. Sin prisa.',
+    ],
+    en: [
+      "Take your time to explore. Let me know when you're ready to continue.",
+      'Enjoy the place. Notify me when you want to move on.',
+      'Stay a moment, this place deserves it. No rush.',
+    ],
+  }
+
+  let type = 'default'
+  if (isHistorical) type = 'historical'
+  else if (isGastronomy) type = 'gastronomy'
+  else if (isNature) type = 'nature'
+
+  const typeOpenings = openings[type][safeLang]
+  const opening = typeOpenings[Math.floor(Math.random() * typeOpenings.length)]
+  const closing = closings[safeLang][Math.floor(Math.random() * closings[safeLang].length)]
+
+  let script = opening
+  if (description) script += ` ${description}`
+  script += ` ${closing}`
+  return script
+}
+
+export function speakInstructions(instructions: string[], lang: Language): void {
+  const ttslang: TTSLang = lang === 'en' ? 'en-US' : 'es-ES'
+  for (const instruction of instructions) {
+    speak(instruction, ttslang)
+  }
+}
 
 // Prepare text: expand abbreviations, clean markdown
 export function prepareTextForSpeech(text: string, lang: 'es' | 'en' = 'es'): string {

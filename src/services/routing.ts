@@ -1,4 +1,4 @@
-import type { RouteResult, NavigationStep } from '../types'
+import type { RouteResult, NavigationStep, Coordinates } from '../types'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1/foot'
 
@@ -311,6 +311,65 @@ export function buildVoiceInstruction(step: NavigationStep, lang: 'es' | 'en'): 
 export function estimateWalkingTime(distanceMeters: number): number {
   // Average walking speed ~1.4 m/s = ~84 m/min
   return Math.round(distanceMeters / 84)
+}
+
+// --- OpenRouteService (ORS) integration ---
+
+export interface WalkingRouteStep {
+  instruction: string
+  distance: number
+  duration: number
+}
+
+export interface WalkingRoute {
+  distance: number
+  duration: number
+  steps: WalkingRouteStep[]
+}
+
+export async function getWalkingRoute(start: Coordinates, end: Coordinates): Promise<WalkingRoute | null> {
+  const OPENROUTE_API_KEY = import.meta.env.VITE_OPENROUTE_API_KEY
+  if (!OPENROUTE_API_KEY) {
+    console.warn('OpenRouteService API key not configured.')
+    return null
+  }
+  try {
+    const response = await fetch(
+      `https://api.openrouteservice.org/v2/directions/foot-walking?api_key=${OPENROUTE_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          coordinates: [[start.lon, start.lat], [end.lon, end.lat]],
+          instructions: true,
+          language: 'es',
+        }),
+      }
+    )
+    if (!response.ok) throw new Error(`OpenRouteService error: ${response.status}`)
+    const data = await response.json() as {
+      routes?: Array<{
+        summary: { distance: number; duration: number }
+        segments: Array<{
+          steps: Array<{ instruction: string; distance: number; duration: number }>
+        }>
+      }>
+    }
+    if (!data.routes?.[0]) throw new Error('No route found')
+    const route = data.routes[0]
+    return {
+      distance: route.summary.distance,
+      duration: route.summary.duration,
+      steps: route.segments[0].steps.map(step => ({
+        instruction: step.instruction,
+        distance: step.distance,
+        duration: step.duration,
+      })),
+    }
+  } catch (error) {
+    console.error('Error getting walking route:', error)
+    return null
+  }
 }
 
 export function orderPOIsOptimally<T extends { lat: number; lon: number }>(

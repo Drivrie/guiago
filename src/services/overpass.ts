@@ -337,6 +337,58 @@ function getPOICount(durationMinutes: number): number {
   return POIS_BY_DURATION[durationMinutes] || Math.floor(durationMinutes / 15)
 }
 
+// Simplified OSM POI fetcher for quick integration with any city
+export async function fetchOSMPOIs(city: City, routeType: RouteType, maxPOIs: number): Promise<POI[]> {
+  const { lat, lon } = city
+  const pad = 0.1
+  const bbox = `${lat - pad},${lon - pad},${lat + pad},${lon + pad}`
+
+  const overpassQuery = `
+    [out:json];
+    (
+      node["tourism"="attraction"](${bbox});
+      node["historic"="monument"](${bbox});
+      node["amenity"="restaurant"](${bbox});
+      node["amenity"="museum"](${bbox});
+    );
+    out center;
+  `
+  try {
+    const response = await fetch(OVERPASS_BASE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `data=${encodeURIComponent(overpassQuery)}`,
+    })
+    if (!response.ok) throw new Error(`Overpass API error: ${response.status}`)
+    const data = await response.json() as { elements?: OverpassElement[] }
+    if (!data.elements) return []
+
+    return data.elements
+      .filter(el => el.tags?.name && (el.lat !== undefined || el.center))
+      .slice(0, maxPOIs)
+      .map(el => {
+        const elLat = el.lat ?? el.center?.lat ?? lat
+        const elLon = el.lon ?? el.center?.lon ?? lon
+        const tags = el.tags || {}
+        return {
+          id: `osm-${el.id}`,
+          name: tags.name || 'Unnamed POI',
+          lat: elLat,
+          lon: elLon,
+          category: tags.tourism || tags.historic || tags.amenity || 'other',
+          routeType,
+          description: tags.description || '',
+          imageUrl: tags.image || '',
+          tags,
+          estimatedVisitMinutes: 20,
+        } satisfies POI
+      })
+  } catch (error) {
+    console.error('Error fetching OSM POIs:', error)
+    return []
+  }
+}
+
 export async function searchPOIsNearby(lat: number, lon: number, radius: number = 500): Promise<POI[]> {
   const query = `[out:json][timeout:15];
 (

@@ -1,14 +1,23 @@
 import type { WikiResult, Language } from '../types'
 
-const WIKI_API = {
+const WIKI_API: Record<string, string> = {
   es: 'https://es.wikipedia.org/w/api.php',
-  en: 'https://en.wikipedia.org/w/api.php'
+  en: 'https://en.wikipedia.org/w/api.php',
+  pl: 'https://pl.wikipedia.org/w/api.php',
+  de: 'https://de.wikipedia.org/w/api.php',
+  fr: 'https://fr.wikipedia.org/w/api.php',
+  it: 'https://it.wikipedia.org/w/api.php',
+  pt: 'https://pt.wikipedia.org/w/api.php',
+  ru: 'https://ru.wikipedia.org/w/api.php',
 }
 
-// Wikivoyage — same MediaWiki API, travel-focused content (tips, what to see, etc.)
-const WIKIVOYAGE_API = {
+const WIKIVOYAGE_API: Record<string, string> = {
   es: 'https://es.wikivoyage.org/w/api.php',
-  en: 'https://en.wikivoyage.org/w/api.php'
+  en: 'https://en.wikivoyage.org/w/api.php',
+  pl: 'https://pl.wikivoyage.org/w/api.php',
+  de: 'https://de.wikivoyage.org/w/api.php',
+  fr: 'https://fr.wikivoyage.org/w/api.php',
+  it: 'https://it.wikivoyage.org/w/api.php',
 }
 
 interface WikiApiResponse {
@@ -28,9 +37,27 @@ interface WikiApiResponse {
   }
 }
 
-export async function searchArticle(query: string, lang: 'es' | 'en' = 'es'): Promise<WikiResult | null> {
+export function getCountryLanguage(countryCode: string): string {
+  const countryToLang: Record<string, string> = {
+    PL: 'pl', ES: 'es', DE: 'de', FR: 'fr', IT: 'it', PT: 'pt', RU: 'ru',
+    GB: 'en', US: 'en', CA: 'en', AU: 'en', BR: 'pt',
+    AT: 'de', CH: 'de', BE: 'fr', MX: 'es', AR: 'es', CO: 'es',
+    CL: 'es', PE: 'es', VE: 'es', NL: 'nl', SE: 'sv', NO: 'no',
+    DK: 'da', FI: 'fi', CZ: 'cs', SK: 'sk', HU: 'hu', RO: 'ro',
+    BG: 'bg', HR: 'hr', SI: 'sl', GR: 'el', TR: 'tr', JP: 'ja',
+    CN: 'zh', KR: 'ko', IN: 'hi', UA: 'uk',
+  }
+  return countryToLang[countryCode?.toUpperCase()] || 'en'
+}
+
+export async function searchArticle(
+  query: string,
+  lang: Language = 'es',
+  countryCode?: string
+): Promise<WikiResult | null> {
+  const targetLang = countryCode ? getCountryLanguage(countryCode) : lang
+  const base = WIKI_API[targetLang] || WIKI_API['en']
   try {
-    const base = WIKI_API[lang]
     const params = new URLSearchParams({
       action: 'query',
       list: 'search',
@@ -39,26 +66,21 @@ export async function searchArticle(query: string, lang: 'es' | 'en' = 'es'): Pr
       format: 'json',
       origin: '*'
     })
-
     const response = await fetch(`${base}?${params}`)
     if (!response.ok) return null
-
     const data: WikiApiResponse = await response.json()
     const results = data?.query?.search
-
     if (!results || results.length === 0) return null
-
-    const firstResult = results[0]
-    return await getFullArticle(firstResult.pageid, lang)
+    return await getFullArticle(results[0].pageid, targetLang)
   } catch (error) {
     console.error('Wikipedia search error:', error)
     return null
   }
 }
 
-export async function getFullArticle(pageid: number, lang: 'es' | 'en' = 'es'): Promise<WikiResult | null> {
+export async function getFullArticle(pageid: number, lang: string): Promise<WikiResult | null> {
   try {
-    const base = WIKI_API[lang]
+    const base = WIKI_API[lang] || WIKI_API['en']
     const params = new URLSearchParams({
       action: 'query',
       pageids: String(pageid),
@@ -69,17 +91,13 @@ export async function getFullArticle(pageid: number, lang: 'es' | 'en' = 'es'): 
       format: 'json',
       origin: '*'
     })
-
     const response = await fetch(`${base}?${params}`)
     if (!response.ok) return null
-
     const data: WikiApiResponse = await response.json()
     const pages = data?.query?.pages
     if (!pages) return null
-
     const page = pages[String(pageid)]
     if (!page || page.missing !== undefined) return null
-
     return {
       pageid: page.pageid!,
       title: page.title!,
@@ -93,18 +111,13 @@ export async function getFullArticle(pageid: number, lang: 'es' | 'en' = 'es'): 
   }
 }
 
-/**
- * Internal: fetch POI info from any MediaWiki-compatible API (Wikipedia, Wikivoyage…)
- * Tries direct title lookup first, falls back to full-text search.
- */
 async function fetchPOIFromMediaWiki(
   name: string,
-  lang: Language,
+  lang: string,
   apiBase: string,
   siteBase: string
 ): Promise<WikiResult | null> {
   try {
-    // 1. Direct title lookup
     const directParams = new URLSearchParams({
       action: 'query',
       titles: name,
@@ -136,7 +149,6 @@ async function fetchPOIFromMediaWiki(
       }
     }
 
-    // 2. Fallback: full-text search
     const searchParams = new URLSearchParams({
       action: 'query', list: 'search', srsearch: name,
       srlimit: '3', format: 'json', origin: '*'
@@ -147,7 +159,6 @@ async function fetchPOIFromMediaWiki(
     const results = searchData?.query?.search
     if (!results?.length) return null
 
-    // 3. Fetch full article for first result
     const fullParams = new URLSearchParams({
       action: 'query', pageids: String(results[0].pageid),
       prop: 'extracts|pageimages', exintro: 'true', exchars: '1500',
@@ -171,37 +182,32 @@ async function fetchPOIFromMediaWiki(
   } catch { return null }
 }
 
-export async function getPOIDescription(name: string, lang: Language = 'es'): Promise<string> {
-  try {
-    const result = await getPOIInfo(name, lang)
-    if (result?.extract) {
-      return result.extract
-    }
-    return generateFallbackDescription(name, lang)
-  } catch (error) {
-    console.error('Error getting POI description:', error)
-    return generateFallbackDescription(name, lang)
-  }
-}
-
-export async function getPOIInfo(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
+export async function getPOIInfo(
+  name: string,
+  lang: Language = 'es',
+  countryCode?: string
+): Promise<WikiResult | null> {
+  const targetLang = countryCode ? getCountryLanguage(countryCode) : lang
   return fetchPOIFromMediaWiki(
-    name, lang,
-    WIKI_API[lang],
-    `https://${lang}.wikipedia.org`
+    name,
+    targetLang,
+    WIKI_API[targetLang] || WIKI_API['en'],
+    `https://${targetLang}.wikipedia.org`
   )
 }
 
-/**
- * Multi-source POI lookup: queries Wikipedia + Wikivoyage in parallel.
- * Wikipedia provides encyclopedic facts; Wikivoyage adds practical travel tips.
- * Returns the merged best result — prefers Wikipedia as base, supplements with
- * Wikivoyage content and fills in missing images from either source.
- */
-export async function getPOIInfoMultiSource(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
+export async function getPOIInfoMultiSource(
+  name: string,
+  lang: Language = 'es',
+  countryCode?: string
+): Promise<WikiResult | null> {
+  const targetLang = countryCode ? getCountryLanguage(countryCode) : lang
+  const wikiBase = WIKI_API[targetLang] || WIKI_API['en']
+  const voyageBase = WIKIVOYAGE_API[targetLang] || WIKIVOYAGE_API['en']
+
   const [wikiRes, voyageRes] = await Promise.allSettled([
-    fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
-    fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
+    fetchPOIFromMediaWiki(name, targetLang, wikiBase, `https://${targetLang}.wikipedia.org`),
+    fetchPOIFromMediaWiki(name, targetLang, voyageBase, `https://${targetLang}.wikivoyage.org`),
   ])
 
   const wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
@@ -211,7 +217,6 @@ export async function getPOIInfoMultiSource(name: string, lang: Language = 'es')
   if (!wiki) return voyage
   if (!voyage) return wiki
 
-  // Merge: Wikipedia as base, Wikivoyage supplement if non-overlapping
   const voyageExtra = voyage.extract && !wiki.extract.includes(voyage.extract.slice(0, 40))
     ? voyage.extract
     : ''
@@ -223,8 +228,26 @@ export async function getPOIInfoMultiSource(name: string, lang: Language = 'es')
   }
 }
 
-export async function getCityDescription(cityName: string, lang: Language = 'es'): Promise<WikiResult | null> {
-  return getPOIInfo(cityName, lang)
+export async function getPOIDescription(
+  name: string,
+  lang: Language = 'es',
+  countryCode?: string
+): Promise<string> {
+  try {
+    const result = await getPOIInfo(name, lang, countryCode)
+    return result?.extract || generateFallbackDescription(name, lang)
+  } catch (error) {
+    console.error('Error getting POI description:', error)
+    return generateFallbackDescription(name, lang)
+  }
+}
+
+export async function getCityDescription(
+  cityName: string,
+  lang: Language = 'es',
+  countryCode?: string
+): Promise<WikiResult | null> {
+  return getPOIInfo(cityName, lang, countryCode)
 }
 
 function cleanWikiExtract(extract: string): string {
@@ -241,8 +264,8 @@ function cleanWikiExtract(extract: string): string {
     .replace(/&nbsp;/g, ' ')
     .replace(/&ndash;/g, '–')
     .replace(/&mdash;/g, '—')
-
-  cleaned = cleaned.replace(/\s+/g, ' ').trim()
+    .replace(/\s+/g, ' ')
+    .trim()
 
   if (cleaned.length < 50) return ''
 
@@ -306,7 +329,6 @@ export function generateAudioScript(
   const extraContent = sentences.slice(3, 5).join(' ')
 
   if (lang === 'en') {
-    // Always start by asking visitor to look at the image to confirm they're at the right place
     const imageConfirm = `Look at the image on your screen — that's ${poi.name}. Make sure you're at the right spot! `
 
     const openings = [
@@ -317,14 +339,14 @@ export function generateAudioScript(
       `So, here you are at ${poi.name}. Have a good look — there's more to this place than meets the eye.`,
     ]
     const connectors = [
-      'And did you know that', 'Interestingly enough,', 'Here\'s something worth knowing:',
-      'This is the fun part —', 'What many people don\'t realise is that'
+      'And did you know that', 'Interestingly enough,', "Here's something worth knowing:",
+      'This is the fun part —', "What many people don't realise is that"
     ]
     const closings = [
-      `Take a good look around before we move on. No rush!`,
-      `Have a proper look — there's a lot to take in here. When you're ready, we'll head to the next stop.`,
-      `Don't rush this one. It deserves your full attention. Just let me know when you're ready to continue.`,
-      `Spend a moment here and soak it all in. We'll move on whenever you're ready.`,
+      'Take a good look around before we move on. No rush!',
+      "Have a proper look — there's a lot to take in here. When you're ready, we'll head to the next stop.",
+      "Don't rush this one. It deserves your full attention. Just let me know when you're ready to continue.",
+      "Spend a moment here and soak it all in. We'll move on whenever you're ready.",
     ]
 
     let script = imageConfirm + pickPhrase(openings, poi.name) + ' '
@@ -334,7 +356,6 @@ export function generateAudioScript(
     return script
   }
 
-  // Spanish: always start by asking visitor to look at the image to confirm location
   const imageConfirm = `Mira la imagen en pantalla, ¿ves ${poi.name}? ¡Estupendo, estás en el lugar correcto! `
 
   const openings = [
@@ -351,11 +372,11 @@ export function generateAudioScript(
     'Por cierto, algo que llama la atención:'
   ]
   const closings = [
-    `¡Echa un buen vistazo y tómate el tiempo que necesites! Cuando estés listo, seguimos.`,
-    `No te vayas sin explorar bien los detalles... Hay mucho que ver aquí. Avisa cuando quieras continuar.`,
-    `Quédate un momento, que este sitio lo merece. Sin prisa. Cuando estés listo, nos vamos a la siguiente parada.`,
-    `¡Mira bien a tu alrededor! Y cuando quieras, continuamos con lo que viene.`,
-    `Bueno, tómate tu tiempo aquí. Hay mucho que absorber. Cuando estés preparado, seguimos adelante.`,
+    '¡Echa un buen vistazo y tómate el tiempo que necesites! Cuando estés listo, seguimos.',
+    'No te vayas sin explorar bien los detalles... Hay mucho que ver aquí. Avisa cuando quieras continuar.',
+    'Quédate un momento, que este sitio lo merece. Sin prisa. Cuando estés listo, nos vamos a la siguiente parada.',
+    '¡Mira bien a tu alrededor! Y cuando quieras, continuamos con lo que viene.',
+    'Bueno, tómate tu tiempo aquí. Hay mucho que absorber. Cuando estés preparado, seguimos adelante.',
   ]
 
   let script = imageConfirm + pickPhrase(openings, poi.name) + ' '
