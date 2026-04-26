@@ -119,7 +119,7 @@ export function TodayPage() {
     setPoiResult(null)
     setPoiAudioScript('')
     try {
-      const result = await getPOIInfoMultiSource(query.trim(), language)
+      const result = await getPOIInfoMultiSource(query.trim(), language, location?.city.countryCode)
       if (!result) {
         setPoiSearchLoading(false)
         return

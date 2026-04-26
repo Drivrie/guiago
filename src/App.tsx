@@ -9,11 +9,13 @@ import { TodayPage } from './pages/TodayPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { useAppStore } from './stores/appStore'
 import { Chatbot } from './components/Chatbot'
-
+import { isHoliday } from './services/holidays'
+import { getCityDetails } from './services/nominatim'
 
 export default function App() {
   const { isOffline, setOffline, language } = useAppStore()
   const [showChatbot, setShowChatbot] = useState(false)
+  const [holidayNotice, setHolidayNotice] = useState<string | null>(null)
 
   // Track network changes app-wide
   useEffect(() => {
@@ -27,6 +29,32 @@ export default function App() {
     }
   }, [])
 
+  // Detect user location → check local public holidays via Nager.Date
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const city = await getCityDetails(pos.coords.latitude, pos.coords.longitude)
+          if (!city?.countryCode) return
+          const today = new Date()
+          const todayIsHoliday = await isHoliday(city.countryCode, today)
+          if (todayIsHoliday) {
+            setHolidayNotice(
+              language === 'es'
+                ? `🎉 ¡Hoy es festivo en ${city.country || city.name}! Algunos lugares pueden tener horario especial.`
+                : `🎉 Today is a public holiday in ${city.country || city.name}! Some places may have special hours.`
+            )
+          }
+        } catch {
+          // Silent fail — holiday check is non-critical
+        }
+      },
+      () => { /* Location denied — skip holiday check */ },
+      { timeout: 5000 }
+    )
+  }, [language])
+
   return (
     <>
       {/* Offline indicator banner */}
@@ -37,6 +65,23 @@ export default function App() {
         >
           <span>📡</span>
           <span>{language === 'es' ? 'Sin conexión — modo offline' : 'No connection — offline mode'}</span>
+        </div>
+      )}
+
+      {/* Local holiday notice banner */}
+      {holidayNotice && !isOffline && (
+        <div
+          className="fixed top-0 left-0 right-0 z-[9998] flex items-center justify-between gap-2 px-4 py-2 text-xs font-semibold text-white safe-top"
+          style={{ background: '#7C3AED' }}
+        >
+          <span className="flex-1 text-center">{holidayNotice}</span>
+          <button
+            onClick={() => setHolidayNotice(null)}
+            className="text-white/70 hover:text-white ml-2 flex-shrink-0"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
 
