@@ -13,7 +13,7 @@ const POIS_BY_DURATION: Record<number, number> = {
 
 // Overpass tag queries per route type
 function buildOverpassQuery(city: City, routeType: RouteType): string {
-  const radius = 3000 // 3km radius from city center
+  const radius = 5000 // 5km radius from city center
   const lat = city.lat
   const lon = city.lon
 
@@ -23,16 +23,21 @@ function buildOverpassQuery(city: City, routeType: RouteType): string {
     case 'imprescindibles':
       // Broad: top landmarks, museums, major attractions
       tagFilters = `
-        node["historic"~"monument|castle|palace|cathedral|fort|archaeological_site"](around:${radius},${lat},${lon});
-        way["historic"~"monument|castle|palace|cathedral|fort|archaeological_site"](around:${radius},${lat},${lon});
+        node["historic"~"monument|castle|palace|cathedral|fort|archaeological_site|church|manor|ruins"](around:${radius},${lat},${lon});
+        way["historic"~"monument|castle|palace|cathedral|fort|archaeological_site|church|manor|ruins"](around:${radius},${lat},${lon});
         node["tourism"="museum"](around:${radius},${lat},${lon});
         way["tourism"="museum"](around:${radius},${lat},${lon});
         node["tourism"="attraction"](around:${radius},${lat},${lon});
         way["tourism"="attraction"](around:${radius},${lat},${lon});
         node["building"~"cathedral|church|palace|castle"](around:${radius},${lat},${lon});
         way["building"~"cathedral|church|palace|castle"](around:${radius},${lat},${lon});
+        node["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
+        way["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
         node["leisure"="park"]["name"](around:${radius},${lat},${lon});
         way["leisure"="park"]["name"](around:${radius},${lat},${lon});
+        node["tourism"="viewpoint"](around:${radius},${lat},${lon});
+        node["man_made"~"tower|lighthouse"](around:${radius},${lat},${lon});
+        way["man_made"~"tower|lighthouse"](around:${radius},${lat},${lon});
       `
       break
 
@@ -55,14 +60,17 @@ function buildOverpassQuery(city: City, routeType: RouteType): string {
 
     case 'monumental':
       tagFilters = `
-        node["historic"~"monument|castle|ruins|archaeological_site|memorial|city_gate|fort|palace|manor|cathedral"](around:${radius},${lat},${lon});
-        way["historic"~"monument|castle|ruins|archaeological_site|memorial|city_gate|fort|palace|manor|cathedral"](around:${radius},${lat},${lon});
+        node["historic"~"monument|castle|ruins|archaeological_site|memorial|city_gate|fort|palace|manor|cathedral|church|building"](around:${radius},${lat},${lon});
+        way["historic"~"monument|castle|ruins|archaeological_site|memorial|city_gate|fort|palace|manor|cathedral|church|building"](around:${radius},${lat},${lon});
         node["tourism"="museum"](around:${radius},${lat},${lon});
         way["tourism"="museum"](around:${radius},${lat},${lon});
-        node["tourism"="attraction"]["historic"](around:${radius},${lat},${lon});
-        way["tourism"="attraction"]["historic"](around:${radius},${lat},${lon});
+        node["tourism"="attraction"](around:${radius},${lat},${lon});
+        way["tourism"="attraction"](around:${radius},${lat},${lon});
         node["building"~"cathedral|church|chapel|mosque|synagogue|palace|castle"](around:${radius},${lat},${lon});
         way["building"~"cathedral|church|chapel|mosque|synagogue|palace|castle"](around:${radius},${lat},${lon});
+        node["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
+        way["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
+        node["tourism"="viewpoint"](around:${radius},${lat},${lon});
       `
       break
 
@@ -114,14 +122,16 @@ function buildOverpassQuery(city: City, routeType: RouteType): string {
 
     case 'arquitectura':
       tagFilters = `
-        node["building"~"cathedral|church|chapel|palace|castle|tower|government|civic|commercial|train_station"](around:${radius},${lat},${lon});
-        way["building"~"cathedral|church|chapel|palace|castle|tower|government|civic|commercial|train_station"](around:${radius},${lat},${lon});
+        node["building"~"cathedral|church|chapel|palace|castle|tower|government|civic|commercial|train_station|monastery|synagogue|mosque"](around:${radius},${lat},${lon});
+        way["building"~"cathedral|church|chapel|palace|castle|tower|government|civic|commercial|train_station|monastery|synagogue|mosque"](around:${radius},${lat},${lon});
         node["architecture:style"](around:${radius},${lat},${lon});
         way["architecture:style"](around:${radius},${lat},${lon});
         node["heritage"](around:${radius},${lat},${lon});
         way["heritage"](around:${radius},${lat},${lon});
-        node["historic"~"building|house|manor|palace|castle"](around:${radius},${lat},${lon});
-        way["historic"~"building|house|manor|palace|castle"](around:${radius},${lat},${lon});
+        node["historic"~"building|house|manor|palace|castle|church"](around:${radius},${lat},${lon});
+        way["historic"~"building|house|manor|palace|castle|church"](around:${radius},${lat},${lon});
+        node["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
+        way["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
         node["tourism"="attraction"]["building"](around:${radius},${lat},${lon});
         way["tourism"="attraction"]["building"](around:${radius},${lat},${lon});
         node["amenity"~"theatre|cinema"]["name"](around:${radius},${lat},${lon});
@@ -337,19 +347,24 @@ function getPOICount(durationMinutes: number): number {
   return POIS_BY_DURATION[durationMinutes] || Math.floor(durationMinutes / 15)
 }
 
-// Simplified OSM POI fetcher for quick integration with any city
+// Broad OSM POI fetcher — covers any city regardless of how its POIs are tagged
 export async function fetchOSMPOIs(city: City, routeType: RouteType, maxPOIs: number): Promise<POI[]> {
   const { lat, lon } = city
-  const pad = 0.1
-  const bbox = `${lat - pad},${lon - pad},${lat + pad},${lon + pad}`
+  const radius = 6000
 
   const overpassQuery = `
-    [out:json];
+    [out:json][timeout:30];
     (
-      node["tourism"="attraction"](${bbox});
-      node["historic"="monument"](${bbox});
-      node["amenity"="restaurant"](${bbox});
-      node["amenity"="museum"](${bbox});
+      node["tourism"~"attraction|museum|viewpoint|artwork"](around:${radius},${lat},${lon});
+      way["tourism"~"attraction|museum"](around:${radius},${lat},${lon});
+      node["historic"](around:${radius},${lat},${lon});
+      way["historic"](around:${radius},${lat},${lon});
+      node["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
+      way["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lon});
+      node["leisure"~"park|garden"]["name"](around:${radius},${lat},${lon});
+      way["leisure"~"park|garden"]["name"](around:${radius},${lat},${lon});
+      node["man_made"~"tower|lighthouse"]["name"](around:${radius},${lat},${lon});
+      way["man_made"~"tower|lighthouse"]["name"](around:${radius},${lat},${lon});
     );
     out center;
   `
@@ -363,26 +378,44 @@ export async function fetchOSMPOIs(city: City, routeType: RouteType, maxPOIs: nu
     const data = await response.json() as { elements?: OverpassElement[] }
     if (!data.elements) return []
 
-    return data.elements
-      .filter(el => el.tags?.name && (el.lat !== undefined || el.center))
-      .slice(0, maxPOIs)
-      .map(el => {
-        const elLat = el.lat ?? el.center?.lat ?? lat
-        const elLon = el.lon ?? el.center?.lon ?? lon
-        const tags = el.tags || {}
-        return {
-          id: `osm-${el.id}`,
-          name: tags.name || 'Unnamed POI',
-          lat: elLat,
-          lon: elLon,
-          category: tags.tourism || tags.historic || tags.amenity || 'other',
-          routeType,
-          description: tags.description || '',
-          imageUrl: tags.image || '',
-          tags,
-          estimatedVisitMinutes: 20,
-        } satisfies POI
+    const seenNames = new Set<string>()
+    const result: POI[] = []
+
+    for (const el of data.elements) {
+      const tags = el.tags || {}
+      const name = tags.name || tags['name:en'] || tags['name:es']
+      if (!name || name.trim().length < 2) continue
+
+      const elLat = el.lat ?? el.center?.lat
+      const elLon = el.lon ?? el.center?.lon
+      if (elLat === undefined || elLon === undefined) continue
+
+      const nameKey = name.toLowerCase().trim()
+      if (seenNames.has(nameKey)) continue
+      seenNames.add(nameKey)
+
+      result.push({
+        id: `osm-${el.id}`,
+        name: name.trim(),
+        lat: elLat,
+        lon: elLon,
+        category: elementToCategory(el, routeType),
+        routeType,
+        description: tags.description || '',
+        imageUrl: tags.image || '',
+        tags,
+        estimatedVisitMinutes: estimateVisitTime(routeType, tags.amenity || tags.tourism || tags.historic || ''),
+        address: buildAddress(tags),
+        openingHours: tags.opening_hours,
+        website: tags.website || tags['contact:website'],
+        wikipediaTitle: tags.wikipedia ? extractWikiTitle(tags.wikipedia) : name,
       })
+
+      if (result.length >= maxPOIs) break
+    }
+
+    result.sort((a, b) => scorePOI(b) - scorePOI(a))
+    return result.slice(0, maxPOIs)
   } catch (error) {
     console.error('Error fetching OSM POIs:', error)
     return []

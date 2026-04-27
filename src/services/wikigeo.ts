@@ -14,14 +14,14 @@ const WIKI_API: Record<string, string> = {
 }
 
 const ROUTE_KEYWORDS: Record<RouteType, RegExp> = {
-  imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|principal|basílica|castillo|torre|plaza mayor|famoso|turístico/i,
-  secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local|vecinos|cotidiano|alternativo|auténtico|escondido|peculiar|mercadillo|taberna|pasaje|patio|calleja/i,
-  monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|real|alcazaba|mezquita|sinagoga|fortaleza/i,
-  historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|fusilamiento|memorial|asesinato|tragedia|holocausto/i,
-  curiosidades: /fuente|estatua|escultura|plaza|barrio|leyenda|misterio|insólito|secreto|subterráneo|peculiar|curiosidad|raro|extraño/i,
-  gastronomia: /mercado|gastronom|vino|tapas|cocina|taberna|bodega|feria|restaurante|jamón|queso|aceite|mariscos/i,
-  arquitectura: /arquitectura|barroco|gótico|renacimiento|mudéjar|modernismo|neoclásico|románico|art.*nouveau|estilo|fachada|claustro/i,
-  naturaleza: /parque|jardín|río|arroyo|sierra|monte|playa|laguna|reserva|bosque|dehesa|marisma|huerta|alameda/i,
+  imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|basílica|castillo|torre|famoso|turístico|cathedral|palace|castle|museum|heritage|landmark|iconic|historic|monument|katedra|zamek|pałac|muzeum|kościół|zabytek|Dom|Kirche|Schloss|Burg|Denkmal|église|château|palais|castello|cattedrale|duomo|basilica/i,
+  secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local|alternativo|auténtico|escondido|peculiar|taberna|pasaje|patio|calleja|hidden|neighbourhood|alley|courtyard|quarter|secret|dzielnica|rynek|uliczka|Viertel|Gasse|Durchgang|quartier|ruelle|quartiere|vicolo/i,
+  monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|mezquita|sinagoga|fortaleza|cathedral|basilica|palace|castle|walls|tower|museum|monument|church|convent|synagogue|fortress|chapel|katedra|bazylika|pałac|zamek|mury|wieża|muzeum|kościół|klasztor|twierdza|synagoga|Dom|Basilika|Schloss|Burg|Stadtmauer|Turm|Kloster|Festung|église|basilique|château|forteresse|monastère|abbaye|cattedrale|castello|convento|fortezza/i,
+  historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|memorial|tragedia|holocausto|cemetery|inquisition|war|battle|execution|massacre|prison|victims|memorial|genocide|cmentarz|więzienie|bitwa|egzekucja|masakra|ofiara|Friedhof|Gefängnis|Krieg|Schlacht|Hinrichtung|Opfer|cimetière|prison|guerre|bataille|esecuzione|prigione|guerra|battaglia/i,
+  curiosidades: /fuente|estatua|escultura|leyenda|misterio|insólito|secreto|peculiar|curiosidad|raro|extraño|fountain|statue|sculpture|legend|mystery|unusual|underground|fontanna|posąg|legenda|tajemnica|Brunnen|Statue|Skulptur|Legende|Geheimnis|fontaine|légende|mystère|fontana|statua|scultura|leggenda|mistero/i,
+  gastronomia: /mercado|gastronom|vino|tapas|cocina|taberna|bodega|restaurante|jamón|queso|aceite|mariscos|market|gastronomy|wine|cuisine|tavern|restaurant|food|targ|kuchnia|wino|restauracja|gospoda|Markt|Küche|Wein|Restaurant|Wirtshaus|marché|cuisine|vin|taverne|mercato|cucina|osteria|trattoria/i,
+  arquitectura: /arquitectura|barroco|gótico|renacimiento|modernismo|neoclásico|románico|art.*nouveau|fachada|claustro|architecture|baroque|gothic|renaissance|neoclassical|romanesque|facade|cloister|architektura|gotyk|renesans|barok|fasada|Architektur|Gotik|Renaissance|Barock|Fassade|Kreuzgang|gothique|façade|architettura|gotico|rinascimento/i,
+  naturaleza: /parque|jardín|río|sierra|monte|playa|laguna|reserva|bosque|marisma|alameda|park|garden|river|mountain|beach|lake|reserve|forest|wetland|nature|ogród|rzeka|góra|plaża|jezioro|las|Garten|Fluss|Berg|Strand|See|Wald|Naturpark|parc|jardin|rivière|montagne|plage|lac|forêt|parco|giardino|fiume|montagna|spiaggia|foresta/i,
 }
 
 function cleanHtml(html: string): string {
@@ -35,32 +35,32 @@ function cleanHtml(html: string): string {
 function scoreArticle(title: string, extract: string, routeType: RouteType): number {
   const text = `${title} ${extract.slice(0, 400)}`.toLowerCase()
   let score = (text.match(ROUTE_KEYWORDS[routeType]) || []).length * 2
-  if (/unesco|patrimonio de la humanidad|heritage/i.test(text)) score += 5
-  if (/catedral|palacio|castillo|museo/i.test(text)) score += 3
-  if (/restaurante|mercado|gastronomía/i.test(text) && routeType === 'gastronomia') score += 4
-  if (title.split(' ').length <= 2 && !/catedral|museo|palacio/i.test(title)) score -= 2
+  if (/unesco|world heritage|patrimonio|welterbe|patrimoine|dziedzictwo/i.test(text)) score += 5
+  if (/catedral|palacio|castillo|museo|cathedral|palace|castle|museum|katedra|zamek|muzeum|Dom|Kirche|église|château|cattedrale/i.test(text)) score += 3
+  if (/restaurante|mercado|gastronomía|restaurant|market|gastronomy|restauracja|targ|Markt|Wirtshaus|mercato/i.test(text) && routeType === 'gastronomia') score += 4
+  if (title.split(' ').length <= 2 && !/catedral|museo|palacio|cathedral|museum|palace|katedra|muzeum|zamek/i.test(title)) score -= 2
   return Math.max(0, score)
 }
 
 function guessCategory(title: string, extract: string, routeType: RouteType): string {
   const t = `${title} ${extract.slice(0, 200)}`.toLowerCase()
-  if (/catedral|basílica/.test(t)) return 'catedral'
-  if (/mezquita/.test(t)) return 'mezquita'
-  if (/sinagoga/.test(t)) return 'sinagoga'
-  if (/iglesia|parroquia|ermita/.test(t)) return 'iglesia'
-  if (/convento|monasterio/.test(t)) return 'convento'
-  if (/palacio|alcázar|alhambra|alcazaba/.test(t)) return 'palacio'
-  if (/castillo|fortaleza|muralla/.test(t)) return 'castillo'
-  if (/museo/.test(t)) return 'museo'
-  if (/torre/.test(t)) return 'torre'
-  if (/puente/.test(t)) return 'puente'
-  if (/plaza/.test(t)) return 'plaza'
-  if (/jardín|parque/.test(t)) return 'jardín'
-  if (/mercado/.test(t)) return 'mercado'
-  if (/cementerio/.test(t)) return 'cementerio'
-  if (/teatro/.test(t)) return 'teatro'
-  if (/universidad/.test(t)) return 'universidad'
-  if (/fuente/.test(t)) return 'fuente'
+  if (/catedral|basílica|cathedral|katedra|bazylika|Dom|Münster|cathédrale|duomo|cattedrale/.test(t)) return 'catedral'
+  if (/mezquita|mosque|moschee|mosquée|moschea/.test(t)) return 'mezquita'
+  if (/sinagoga|synagogue|synagoga|Synagoge|syn[ae]gogue/.test(t)) return 'sinagoga'
+  if (/iglesia|parroquia|ermita|church|kościół|Kirche|église|chiesa|capilla|chapel|kapelle|chapelle/.test(t)) return 'iglesia'
+  if (/convento|monasterio|monastery|klasztor|Kloster|monastère|monastero|abbaye|abbazia/.test(t)) return 'convento'
+  if (/palacio|alcázar|alhambra|alcazaba|palace|pałac|Schloss|Palast|palais|palazzo/.test(t)) return 'palacio'
+  if (/castillo|fortaleza|muralla|castle|zamek|Burg|château|castello|fortezza|twierdza/.test(t)) return 'castillo'
+  if (/museo|museum|muzeum|Musée/.test(t)) return 'museo'
+  if (/torre|tower|wieża|Turm|tour/.test(t)) return 'torre'
+  if (/puente|bridge|most|Brücke|pont|ponte/.test(t)) return 'puente'
+  if (/plaza|square|rynek|Platz|place|piazza/.test(t)) return 'plaza'
+  if (/jardín|parque|park|ogród|Park|parc|parco|giardino/.test(t)) return 'jardín'
+  if (/mercado|market|targ|Markt|marché|mercato/.test(t)) return 'mercado'
+  if (/cementerio|cemetery|cmentarz|Friedhof|cimetière|cimitero/.test(t)) return 'cementerio'
+  if (/teatro|theatre|teatr|Theater|théâtre/.test(t)) return 'teatro'
+  if (/universidad|university|uniwersytet|Universität|université|università/.test(t)) return 'universidad'
+  if (/fuente|fountain|fontanna|Brunnen|fontaine|fontana/.test(t)) return 'fuente'
   const defaults: Record<RouteType, string> = {
     imprescindibles: 'lugar imprescindible',
     secretos_locales: 'secreto local',
@@ -90,8 +90,8 @@ export async function searchPOIsWikipedia(
       action: 'query',
       list: 'geosearch',
       gscoord: `${city.lat}|${city.lon}`,
-      gsradius: '3000',
-      gslimit: '50',
+      gsradius: '8000',
+      gslimit: '100',
       format: 'json',
       origin: '*',
     })
@@ -157,7 +157,7 @@ export async function searchPOIsWikipedia(
 
     scored.sort((a, b) => b._score - a._score)
     const relevant = scored.filter(p => p._score > 0)
-    const result = relevant.length >= 3 ? relevant : scored
+    const result = relevant.length >= 1 ? relevant : scored
 
     // Translate POI content to app language if Wikipedia language differs
     if (city.countryCode) {

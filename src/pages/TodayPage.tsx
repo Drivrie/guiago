@@ -119,7 +119,10 @@ export function TodayPage() {
     setPoiResult(null)
     setPoiAudioScript('')
     try {
-      const result = await getPOIInfoMultiSource(query.trim(), language, location?.city.countryCode)
+      // Include city + country in query so Wikipedia returns the local result, not the most famous global one
+      const cityCtx = [location?.city.name, location?.city.country].filter(Boolean).join(' ')
+      const queryWithCity = cityCtx ? `${query.trim()} ${cityCtx}` : query.trim()
+      const result = await getPOIInfoMultiSource(queryWithCity, language, location?.city.countryCode)
       if (!result) {
         setPoiSearchLoading(false)
         return

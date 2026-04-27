@@ -48,6 +48,8 @@ export function ActiveRoutePage() {
   const [navigateToInput, setNavigateToInput] = useState('')
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const keepAliveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const currentPOI = pois[currentPOIIndex]
   const nextPOIObj = pois[currentPOIIndex + 1] || null
@@ -92,11 +94,32 @@ export function ActiveRoutePage() {
     } else {
       wakeLockRef.current?.release().catch(() => {})
       wakeLockRef.current = null
+      stopKeepAlive()
     }
     return () => {
       wakeLockRef.current?.release().catch(() => {})
       wakeLockRef.current = null
     }
+  }, [phase])
+
+  // ---- Reacquire wake lock + resume AudioContext when screen comes back on ----
+  useEffect(() => {
+    async function onVisibility() {
+      if (document.hidden) return
+      if (audioCtxRef.current?.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {})
+      }
+      if (phase === 'navigating' || phase === 'at_poi' || phase === 'post_poi') {
+        try {
+          if (!('wakeLock' in navigator)) return
+          wakeLockRef.current = await (navigator as Navigator & {
+            wakeLock: { request: (t: string) => Promise<{ release: () => Promise<void> }> }
+          }).wakeLock.request('screen')
+        } catch { /* denied or not supported */ }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [phase])
 
   // ---- GPS arrival detection (30m auto-arrive) ----
@@ -205,8 +228,67 @@ export function ActiveRoutePage() {
     return () => { clearTimeout(timer); stopTTS() }
   }, [phase])
 
+  // ---- MediaSession API: lock-screen play/pause/skip controls ----
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    if (phase !== 'at_poi' && phase !== 'navigating') return
+    if (!currentPOI) return
+
+    const ttsLang = language === 'es' ? 'es-ES' as const : 'en-US' as const
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentPOI.name,
+      artist: currentRoute?.city.name || 'GuiAgo',
+      album: language === 'es' ? 'Guía de audio' : 'Audio guide',
+    })
+    navigator.mediaSession.setActionHandler('pause', () => stopTTS())
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (audioScript) speak(audioScript, ttsLang)
+    })
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+      if (phase === 'at_poi' || phase === 'post_poi') advanceToNext()
+    })
+    return () => {
+      try {
+        navigator.mediaSession.setActionHandler('pause', null)
+        navigator.mediaSession.setActionHandler('play', null)
+        navigator.mediaSession.setActionHandler('nexttrack', null)
+      } catch { /* browser may not support removal */ }
+    }
+  }, [phase, currentPOI?.id, audioScript, language])
+
+  // Play a tiny silent audio buffer every 25 s — keeps iOS audio session alive when screen is off
+  function startKeepAlive() {
+    function tick() {
+      try {
+        if (!audioCtxRef.current) {
+          audioCtxRef.current = new window.AudioContext()
+        }
+        const ctx = audioCtxRef.current
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+        // 0.3-second silent buffer — inaudible but keeps the session open
+        const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.3), ctx.sampleRate)
+        const src = ctx.createBufferSource()
+        src.buffer = buf
+        src.connect(ctx.destination)
+        src.start()
+        keepAliveTimerRef.current = setTimeout(tick, 25000)
+      } catch { /* AudioContext not available — degrade gracefully */ }
+    }
+    tick()
+  }
+
+  function stopKeepAlive() {
+    if (keepAliveTimerRef.current) {
+      clearTimeout(keepAliveTimerRef.current)
+      keepAliveTimerRef.current = null
+    }
+    audioCtxRef.current?.close().catch(() => {})
+    audioCtxRef.current = null
+  }
+
   // ---- Start navigation (from ready_to_start → navigating) ----
   function startNavigation() {
+    startKeepAlive()
     stopTTS()
     const firstPOI = pois[0]
     if (!voiceMuted && firstPOI) {
