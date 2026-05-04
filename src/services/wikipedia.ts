@@ -193,19 +193,75 @@ export async function getPOIInfo(name: string, lang: Language = 'es'): Promise<W
 }
 
 /**
+ * City-aware POI lookup. When `context` is provided (city name + optional country and
+ * coordinates), the search is biased to results inside that locality — preventing the
+ * "Catedral" query from returning Sevilla's cathedral when the user is actually in
+ * Burgos. When coordinates are given, results are validated against geosearch.
+ */
+export interface POILookupContext {
+  cityName?: string
+  country?: string
+  countryCode?: string
+  lat?: number
+  lon?: number
+  /** Search radius in metres for coordinate validation (default 6km). */
+  radiusMeters?: number
+}
+
+/**
  * Multi-source POI lookup: queries Wikipedia + Wikivoyage in parallel.
  * Wikipedia provides encyclopedic facts; Wikivoyage adds practical travel tips.
  * Returns the merged best result — prefers Wikipedia as base, supplements with
  * Wikivoyage content and fills in missing images from either source.
+ *
+ * If `context` is given, queries are city-scoped and results that don't match
+ * the city (by geo or by extract content) are rejected, then the search retries
+ * with the bare query as a last resort.
  */
-export async function getPOIInfoMultiSource(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
+export async function getPOIInfoMultiSource(
+  name: string,
+  lang: Language = 'es',
+  context?: POILookupContext
+): Promise<WikiResult | null> {
+  // 1. If we have a city context, prefer geosearch — only Wikipedia articles whose
+  //    coordinates fall within `radiusMeters` of the city are accepted. This is
+  //    the only reliable way to prevent cross-city contamination.
+  if (context?.lat !== undefined && context?.lon !== undefined) {
+    const geoHit = await searchPOIByGeo(name, lang, context.lat, context.lon, context.radiusMeters ?? 6000)
+    if (geoHit) return geoHit
+  }
+
+  // 2. City-scoped name search: append city + country to the query so MediaWiki's
+  //    full-text search disambiguates correctly. Used for both Wikipedia and Wikivoyage.
+  const scopedQuery = context?.cityName
+    ? [name, context.cityName, context.country].filter(Boolean).join(' ')
+    : name
+
   const [wikiRes, voyageRes] = await Promise.allSettled([
-    fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
-    fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
+    fetchPOIFromMediaWiki(scopedQuery, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
+    fetchPOIFromMediaWiki(scopedQuery, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
   ])
 
-  const wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
-  const voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
+  let wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
+  let voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
+
+  // 3. If we still have nothing relevant and a city was given, retry with bare name as fallback
+  if ((!wiki || !articleMatchesCity(wiki, context)) &&
+      (!voyage || !articleMatchesCity(voyage, context)) &&
+      context?.cityName && scopedQuery !== name) {
+    const [bareWiki, bareVoyage] = await Promise.allSettled([
+      fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
+      fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
+    ])
+    if (!wiki) wiki = bareWiki.status === 'fulfilled' ? bareWiki.value : null
+    if (!voyage) voyage = bareVoyage.status === 'fulfilled' ? bareVoyage.value : null
+  }
+
+  // 4. If a city context exists, reject results that clearly belong elsewhere
+  if (context?.cityName) {
+    if (wiki && !articleMatchesCity(wiki, context)) wiki = null
+    if (voyage && !articleMatchesCity(voyage, context)) voyage = null
+  }
 
   if (!wiki && !voyage) return null
   if (!wiki) return voyage
@@ -221,6 +277,96 @@ export async function getPOIInfoMultiSource(name: string, lang: Language = 'es')
     imageUrl: wiki.imageUrl || voyage.imageUrl,
     extract: [wiki.extract, voyageExtra].filter(Boolean).join(' ').trim(),
   }
+}
+
+/** Heuristic: does the article's extract mention the requested city / country? */
+function articleMatchesCity(article: WikiResult, context?: POILookupContext): boolean {
+  if (!context?.cityName) return true
+  const haystack = `${article.title} ${article.extract}`.toLowerCase()
+  if (haystack.includes(context.cityName.toLowerCase())) return true
+  if (context.country && haystack.includes(context.country.toLowerCase())) return true
+  return false
+}
+
+/**
+ * Geo-validated POI lookup: uses Wikipedia geosearch around (lat,lon) so we only
+ * accept articles physically located inside the user's city.
+ */
+async function searchPOIByGeo(
+  name: string,
+  lang: Language,
+  lat: number,
+  lon: number,
+  radiusMeters: number
+): Promise<WikiResult | null> {
+  try {
+    const base = WIKI_API[lang]
+    // First, run a city-scoped full-text search to identify candidate page IDs.
+    const searchParams = new URLSearchParams({
+      action: 'query', list: 'search', srsearch: name,
+      srlimit: '10', format: 'json', origin: '*'
+    })
+    const searchResp = await fetch(`${base}?${searchParams}`)
+    if (!searchResp.ok) return null
+    const searchData = await searchResp.json() as { query?: { search?: Array<{ pageid: number; title: string }> } }
+    const hits = searchData.query?.search || []
+    if (hits.length === 0) return null
+
+    // Fetch coordinates for each hit and pick the first one inside the radius.
+    const pageIds = hits.map(h => h.pageid).join('|')
+    const detailParams = new URLSearchParams({
+      action: 'query', pageids: pageIds,
+      prop: 'extracts|pageimages|coordinates',
+      exintro: 'true', exchars: '1500',
+      pithumbsize: '600', colimit: '1',
+      format: 'json', origin: '*'
+    })
+    const detailResp = await fetch(`${base}?${detailParams}`)
+    if (!detailResp.ok) return null
+    const detailData = await detailResp.json() as {
+      query?: {
+        pages?: Record<string, {
+          pageid?: number; title?: string; extract?: string;
+          thumbnail?: { source?: string };
+          coordinates?: Array<{ lat: number; lon: number }>;
+          missing?: string;
+        }>
+      }
+    }
+    const pages = detailData.query?.pages || {}
+
+    for (const hit of hits) {
+      const page = pages[String(hit.pageid)]
+      if (!page || page.missing !== undefined) continue
+      const coords = page.coordinates?.[0]
+      if (!coords) continue
+      const distM = haversineMeters(lat, lon, coords.lat, coords.lon)
+      if (distM > radiusMeters) continue
+      const extract = cleanWikiExtract(page.extract || '')
+      if (!extract) continue
+      return {
+        pageid: page.pageid!,
+        title: page.title!,
+        extract,
+        imageUrl: page.thumbnail?.source,
+        url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title!.replace(/ /g, '_'))}`,
+      }
+    }
+    return null
+  } catch (err) {
+    console.error('searchPOIByGeo error:', err)
+    return null
+  }
+}
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) ** 2
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 export async function getCityDescription(cityName: string, lang: Language = 'es'): Promise<WikiResult | null> {

@@ -119,7 +119,19 @@ export function TodayPage() {
     setPoiResult(null)
     setPoiAudioScript('')
     try {
-      const result = await getPOIInfoMultiSource(query.trim(), language)
+      // Pass city context so the search is scoped to the user's locality —
+      // prevents picking up an article about a place with the same name in
+      // another city/country (e.g. "Catedral" returning Sevilla when the user
+      // is in Burgos).
+      const context = location ? {
+        cityName: location.city.name,
+        country: location.city.country,
+        countryCode: location.city.countryCode,
+        lat: userCoords?.[0] ?? location.city.lat,
+        lon: userCoords?.[1] ?? location.city.lon,
+      } : undefined
+
+      const result = await getPOIInfoMultiSource(query.trim(), language, context)
       if (!result) {
         setPoiSearchLoading(false)
         return
@@ -151,14 +163,38 @@ export function TodayPage() {
     setPoiResult(null)
     setPoiAudioScript('')
     try {
-      // Reverse geocode to nearest named place
-      const resp = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${userCoords[0]}&lon=${userCoords[1]}&zoom=18&addressdetails=1`,
-        { headers: { 'Accept-Language': es ? 'es' : 'en' } }
-      )
-      if (!resp.ok) { setPoiSearchLoading(false); return }
-      const data = await resp.json() as { name?: string; display_name?: string; namedetails?: Record<string, string> }
-      const placeName = data.namedetails?.name || data.name || data.display_name?.split(',')[0] || ''
+      // 1. Try a Wikipedia geosearch — far more reliable than Nominatim's
+      //    reverse name guess, which often returns a generic street name.
+      const geoParams = new URLSearchParams({
+        action: 'query',
+        list: 'geosearch',
+        gscoord: `${userCoords[0]}|${userCoords[1]}`,
+        gsradius: '500',
+        gslimit: '5',
+        format: 'json',
+        origin: '*',
+      })
+      const wikiLang = es ? 'es' : 'en'
+      const geoResp = await fetch(`https://${wikiLang}.wikipedia.org/w/api.php?${geoParams}`)
+      let placeName = ''
+      if (geoResp.ok) {
+        const geoData = await geoResp.json() as { query?: { geosearch?: Array<{ title: string; lat: number; lon: number }> } }
+        const nearest = geoData.query?.geosearch?.[0]
+        if (nearest) placeName = nearest.title
+      }
+
+      // 2. Fallback: reverse geocode to the nearest named place via Nominatim
+      if (!placeName) {
+        const resp = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${userCoords[0]}&lon=${userCoords[1]}&zoom=18&addressdetails=1&namedetails=1`,
+          { headers: { 'Accept-Language': es ? 'es' : 'en' } }
+        )
+        if (resp.ok) {
+          const data = await resp.json() as { name?: string; display_name?: string; namedetails?: Record<string, string> }
+          placeName = data.namedetails?.name || data.name || data.display_name?.split(',')[0] || ''
+        }
+      }
+
       if (!placeName) { setPoiSearchLoading(false); return }
       setPoiQuery(placeName)
       setPoiSearchLoading(false)

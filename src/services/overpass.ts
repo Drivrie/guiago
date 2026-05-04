@@ -11,9 +11,23 @@ const POIS_BY_DURATION: Record<number, number> = {
   480: 20
 }
 
+// Derive radius from city's bounding box (bigger for sprawling cities, smaller for towns).
+// Falls back to 5km. Allows up to 12km for big metros.
+function deriveOverpassRadius(city: City): number {
+  if (city.boundingBox) {
+    const [minLat, maxLat, minLon, maxLon] = city.boundingBox
+    const latM = Math.abs(maxLat - minLat) * 111000
+    const midLat = (maxLat + minLat) / 2
+    const lonM = Math.abs(maxLon - minLon) * 111000 * Math.cos((midLat * Math.PI) / 180)
+    const halfDiag = Math.max(latM, lonM) / 2
+    return Math.min(12000, Math.max(4000, Math.round(halfDiag * 1.3)))
+  }
+  return 5000
+}
+
 // Overpass tag queries per route type
 function buildOverpassQuery(city: City, routeType: RouteType): string {
-  const radius = 3000 // 3km radius from city center
+  const radius = deriveOverpassRadius(city)
   const lat = city.lat
   const lon = city.lon
 
@@ -212,6 +226,30 @@ function estimateVisitTime(routeType: RouteType, category: string): number {
   return time
 }
 
+// Build a "broad heritage" Overpass fallback that catches Wikidata/Wikipedia-tagged
+// elements regardless of route type. This is what unlocks POIs in less-known cities,
+// since locally-relevant landmarks are almost always tagged with wikidata or wikipedia
+// in OSM even when no English/Spanish Wikipedia article exists.
+function buildBroadHeritageQuery(city: City): string {
+  const radius = deriveOverpassRadius(city)
+  const lat = city.lat
+  const lon = city.lon
+  return `[out:json][timeout:30];
+(
+  node["wikidata"](around:${radius},${lat},${lon});
+  way["wikidata"](around:${radius},${lat},${lon});
+  node["wikipedia"](around:${radius},${lat},${lon});
+  way["wikipedia"](around:${radius},${lat},${lon});
+  node["heritage"](around:${radius},${lat},${lon});
+  way["heritage"](around:${radius},${lat},${lon});
+  node["tourism"~"attraction|museum|gallery|artwork|viewpoint|monument"](around:${radius},${lat},${lon});
+  way["tourism"~"attraction|museum|gallery|artwork|viewpoint|monument"](around:${radius},${lat},${lon});
+  node["historic"](around:${radius},${lat},${lon});
+  way["historic"](around:${radius},${lat},${lon});
+);
+out center;`
+}
+
 export async function getPOIsByCity(city: City, routeType: RouteType, maxDuration: number = 180): Promise<POI[]> {
   try {
     const query = buildOverpassQuery(city, routeType)
@@ -229,7 +267,31 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
     }
 
     const data = await response.json()
-    const elements: OverpassElement[] = data.elements || []
+    let elements: OverpassElement[] = data.elements || []
+
+    // For less-known cities the type-specific query may return very few results.
+    // Issue a parallel broad heritage query and merge unique elements so that locally-
+    // famous places tagged with wikidata/wikipedia/heritage always have a chance to surface.
+    if (elements.length < 20) {
+      try {
+        const broadResp = await fetch(OVERPASS_BASE, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `data=${encodeURIComponent(buildBroadHeritageQuery(city))}`,
+        })
+        if (broadResp.ok) {
+          const broadData = await broadResp.json()
+          const broad: OverpassElement[] = broadData.elements || []
+          const seen = new Set(elements.map(e => `${e.type}-${e.id}`))
+          for (const el of broad) {
+            const key = `${el.type}-${el.id}`
+            if (!seen.has(key)) { elements.push(el); seen.add(key) }
+          }
+        }
+      } catch {
+        // Broad fallback is best-effort
+      }
+    }
 
     // Process elements - filter those with names and valid coordinates
     const processedPOIs: POI[] = []
@@ -237,7 +299,14 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
 
     for (const element of elements) {
       const tags = element.tags || {}
-      const name = tags.name || tags['name:es'] || tags['name:en']
+      // Prefer the local-language name when available, then app languages, then any locale variant.
+      // This ensures the POI is shown with its real name in the country where it exists.
+      const name = tags.name
+        || tags['name:en']
+        || tags['name:es']
+        || Object.entries(tags).find(([k]) => k.startsWith('name:'))?.[1]
+        || tags.official_name
+        || tags['int_name']
 
       if (!name || name.trim().length < 2) continue
 
