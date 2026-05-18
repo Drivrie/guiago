@@ -12,7 +12,7 @@ import { getAudioScript } from '../services/storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
 import { speak, stop as stopTTS } from '../services/tts'
-import { startKeepAlive, stopKeepAlive } from '../services/backgroundKeepAlive'
+import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services/backgroundKeepAlive'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
@@ -89,6 +89,23 @@ export function ActiveRoutePage() {
       // Only fully stop when leaving the page (handled below in unmount-only effect)
     }
   }, [phase])
+
+  // ---- Lock-screen / notification metadata so the user sees what GuiAgo is
+  // doing while the screen is off (e.g. "Caminando hacia la Catedral"). ----
+  useEffect(() => {
+    if (!currentPOI) return
+    if (phase === 'navigating') {
+      setKeepAliveMetadata(
+        language === 'es' ? `Caminando hacia ${currentPOI.name}` : `Walking to ${currentPOI.name}`,
+        language === 'es' ? 'GuiAgo · Guía turístico' : 'GuiAgo · Tour guide',
+      )
+    } else if (phase === 'at_poi' || phase === 'post_poi') {
+      setKeepAliveMetadata(
+        currentPOI.name,
+        language === 'es' ? 'GuiAgo · Audioguía' : 'GuiAgo · Audio guide',
+      )
+    }
+  }, [phase, currentPOI, language])
 
   // ---- Hard cleanup on unmount: release everything ----
   useEffect(() => {

@@ -209,7 +209,7 @@ export function RouteSetupPage() {
       if (pois.length < 2) {
         async function searchForType(rType: RouteType): Promise<POI[]> {
           setLoading(true, language === 'es' ? `Buscando en Wikipedia...` : 'Searching Wikipedia...')
-          let results = await searchPOIsWikipedia(selectedCity!, rType, candidateTarget, language, visitedNames, radius)
+          const results = await searchPOIsWikipedia(selectedCity!, rType, candidateTarget, language, visitedNames, radius)
           if (results.length < 3) {
             setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
             const overpassPOIs = await getPOIsByCity(selectedCity!, rType, selectedDuration!, radius)

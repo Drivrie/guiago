@@ -160,8 +160,12 @@ export async function loadLocalModel(
 
     // Load WASM runtime from CDN so it is not bundled into the app's dist.
     // This keeps the deployed site small; the WASM is downloaded only when needed.
-    env.backends.onnx.wasm.wasmPaths =
-      'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
+    // `backends.onnx.wasm` is typed as optionally undefined by the library, so
+    // guard before assigning rather than asserting non-null.
+    const onnxWasm = env.backends?.onnx?.wasm
+    if (onnxWasm) {
+      onnxWasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
+    }
 
     const device = isWebGPUAvailable() ? 'webgpu' : 'wasm'
 

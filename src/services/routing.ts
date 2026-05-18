@@ -362,11 +362,14 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
   const unvisited = [...pois]
   const ordered: T[] = []
 
-  // Start from first POI or given start position
-  let currentLat = startLat ?? pois[0].lat
-  let currentLon = startLon ?? pois[0].lon
+  // Start from the given start position, or from the first POI if none given.
+  // Use an explicit undefined check: a valid start coordinate can legitimately
+  // be 0 (equator / prime meridian), which `!startLat` would wrongly discard.
+  const hasStart = startLat !== undefined && startLon !== undefined
+  let currentLat = hasStart ? startLat : pois[0].lat
+  let currentLon = hasStart ? startLon : pois[0].lon
 
-  if (!startLat) {
+  if (!hasStart) {
     ordered.push(unvisited.splice(0, 1)[0])
     currentLat = ordered[0].lat
     currentLon = ordered[0].lon

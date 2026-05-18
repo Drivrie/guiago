@@ -270,7 +270,7 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
     }
 
     const data = await response.json()
-    let elements: OverpassElement[] = data.elements || []
+    const elements: OverpassElement[] = data.elements || []
 
     // For less-known cities the type-specific query may return very few results.
     // Issue a parallel broad heritage query and merge unique elements so that locally-
