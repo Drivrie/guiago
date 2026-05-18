@@ -16,12 +16,52 @@ import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
-type GuidePhase = 'selecting_start' | 'ready_to_start' | 'navigating' | 'at_poi' | 'post_poi' | 'complete'
+type GuidePhase =
+  | 'selecting_mode'
+  | 'selecting_start'
+  | 'ready_to_start'
+  | 'navigating'
+  | 'external_overview'
+  | 'at_poi'
+  | 'post_poi'
+  | 'complete'
+
+type NavMode = 'app' | 'external'
 
 function fallbackSegment(from: POI, to: POI): RouteSegment {
   const direct = getDirectRoute(from, to)
   const steps = getStepByStepInstructions(direct)
   return { from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] }
+}
+
+/** Deep links to navigate (walking) from an optional origin to a destination POI. */
+function externalDirLinks(
+  to: { lat: number; lon: number },
+  from?: { lat: number; lon: number } | null
+) {
+  const dest = `${to.lat},${to.lon}`
+  const origin = from ? `${from.lat},${from.lon}` : ''
+  return {
+    google: `https://www.google.com/maps/dir/?api=1&${origin ? `origin=${origin}&` : ''}destination=${dest}&travelmode=walking`,
+    waze: `https://www.waze.com/ul?ll=${dest}&navigate=yes`,
+    apple: `maps://maps.apple.com/?${origin ? `saddr=${origin}&` : ''}daddr=${dest}&dirflg=w`,
+  }
+}
+
+/** Full multi-stop walking route in Google Maps (origin → waypoints → last POI). */
+function googleFullRouteUrl(
+  pois: { lat: number; lon: number }[],
+  start?: { lat: number; lon: number } | null
+): string {
+  if (pois.length === 0) return ''
+  const points = start ? [start, ...pois] : [...pois]
+  const origin = `${points[0].lat},${points[0].lon}`
+  const destination = `${points[points.length - 1].lat},${points[points.length - 1].lon}`
+  const mid = points.slice(1, -1).slice(0, 9) // Google Maps URL supports ~9 waypoints
+  const waypoints = mid.map(p => `${p.lat},${p.lon}`).join('|')
+  return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}` +
+    (waypoints ? `&waypoints=${encodeURIComponent(waypoints)}` : '') +
+    `&travelmode=walking`
 }
 
 export function ActiveRoutePage() {
@@ -32,7 +72,8 @@ export function ActiveRoutePage() {
     userLocation: globalUserLocation, setUserLocation: setGlobalUserLocation
   } = useAppStore()
 
-  const [phase, setPhase] = useState<GuidePhase>('selecting_start')
+  const [phase, setPhase] = useState<GuidePhase>('selecting_mode')
+  const [navMode, setNavMode] = useState<NavMode | null>(null)
   const [userLocation, setUserLocation] = useState<[number, number] | null>(globalUserLocation)
   const [audioScript, setAudioScript] = useState('')
   const [audioLoading, setAudioLoading] = useState(false)
@@ -341,10 +382,57 @@ export function ActiveRoutePage() {
     setPhase('ready_to_start')
   }
 
+  // ---- Enter "external maps" mode: GuiAgo gives the POI explanations, the
+  // user navigates between stops with Google Maps / Waze / Apple Maps. No
+  // in-app turn-by-turn guiding is performed. ----
+  function enterExternalMode() {
+    if (!currentRoute) return
+    setNavMode('external')
+    const start = userLocation
+      ? { lat: userLocation[0], lon: userLocation[1] }
+      : { lat: currentRoute.city.lat, lon: currentRoute.city.lon }
+    const ordered = orderPOIsOptimally([...pois], start.lat, start.lon)
+    setPOIs(ordered)
+    // Clear segments: in external mode GuiAgo doesn't draw an in-app walking
+    // line (the user navigates with their own maps app). Totals are preserved.
+    setRoute({ ...currentRoute, pois: ordered, segments: [] })
+    setCurrentPOIIndex(0)
+    setPhase('external_overview')
+  }
+
+  function chooseAppMode() {
+    setNavMode('app')
+    setPhase('selecting_start')
+  }
+
+  // ---- Advance to next POI in external mode (no in-app navigation) ----
+  function advanceExternal() {
+    stopTTS()
+    startKeepAlive().catch(() => {})
+    if (isLast) { setPhase('complete'); return }
+    setCurrentPOIIndex(currentPOIIndex + 1)
+    setPhase('at_poi')
+  }
+
+  // Enter a POI's explanation in external mode from a user gesture (iOS needs
+  // the silent keep-alive audio to start inside the tap).
+  function explainPOIExternal(idx: number) {
+    stopTTS()
+    startKeepAlive().catch(() => {})
+    setCurrentPOIIndex(idx)
+    setPhase('at_poi')
+  }
+
   function advanceToNext() {
     stopTTS()
     if (isLast) {
       setPhase('complete')
+      return
+    }
+    // External mode never enters in-app 'navigating'
+    if (navMode === 'external') {
+      setCurrentPOIIndex(currentPOIIndex + 1)
+      setPhase('at_poi')
       return
     }
     const nextIdx = currentPOIIndex + 1
@@ -379,6 +467,236 @@ export function ActiveRoutePage() {
           <p className="text-stone-500 mb-4">{language === 'es' ? 'No hay ruta activa' : 'No active route'}</p>
           <Button onClick={() => navigate('/')}>{language === 'es' ? 'Volver al inicio' : 'Go home'}</Button>
         </div>
+      </div>
+    )
+  }
+
+  // ======================================================
+  // PHASE: SELECTING MODE (app-guided vs. external maps)
+  // ======================================================
+  if (phase === 'selecting_mode') {
+    return (
+      <div className="min-h-screen bg-stone-900 flex flex-col safe-top">
+        <div className="flex items-center gap-3 px-4 py-4 z-10">
+          <button
+            onClick={() => navigate('/')}
+            className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-bold text-sm truncate">
+              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute.city.name}
+            </p>
+            <p className="text-stone-400 text-xs">
+              {pois.length} {language === 'es' ? 'paradas' : 'stops'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex-1 px-4 pb-8 flex flex-col justify-center gap-4 max-w-lg mx-auto w-full">
+          {currentRoute?.story && (
+            <div className="bg-gradient-to-br from-orange-500/20 to-amber-500/10 border border-orange-500/30 rounded-2xl p-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl flex-shrink-0">✨</span>
+                <p className="text-white/90 text-sm leading-relaxed italic">{currentRoute.story}</p>
+              </div>
+            </div>
+          )}
+
+          <div className="text-center mb-2">
+            <p className="text-white text-2xl font-black mb-1">
+              {language === 'es' ? '¿Cómo quieres recorrer la ruta?' : 'How do you want to take the tour?'}
+            </p>
+            <p className="text-stone-400 text-sm">
+              {language === 'es'
+                ? 'En ambos modos GuiAgo te narra cada lugar como un guía profesional'
+                : 'In both modes GuiAgo narrates each place like a professional guide'}
+            </p>
+          </div>
+
+          {/* Option A: app-guided */}
+          <button
+            onClick={chooseAppMode}
+            className="bg-orange-500 rounded-2xl p-5 text-left transition-all active:scale-95 shadow-lg shadow-orange-900/40"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <circle cx="12" cy="12" r="3" fill="currentColor" />
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3" strokeLinecap="round" />
+                  <circle cx="12" cy="12" r="8" strokeOpacity="0.4" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-black text-base">
+                  {language === 'es' ? '🧭 Guiado por GuiAgo' : '🧭 Guided by GuiAgo'}
+                </p>
+                <p className="text-orange-100 text-sm mt-0.5">
+                  {language === 'es'
+                    ? 'Navegación paso a paso a pie + audioguía en cada parada'
+                    : 'Turn-by-turn walking navigation + audio guide at each stop'}
+                </p>
+              </div>
+              <svg className="w-5 h-5 text-white/70 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+          </button>
+
+          {/* Option B: external maps */}
+          <button
+            onClick={enterExternalMode}
+            className="bg-stone-800 rounded-2xl p-5 text-left transition-all border border-stone-700 hover:border-blue-500 active:scale-95"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 bg-blue-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                <span className="text-2xl">🗺️</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-black text-base">
+                  {language === 'es' ? '🗺️ Navegar con Maps externo' : '🗺️ Navigate with external Maps'}
+                </p>
+                <p className="text-stone-400 text-sm mt-0.5">
+                  {language === 'es'
+                    ? 'Tú vas con Google Maps, Waze o Apple Maps; GuiAgo te explica cada punto al llegar'
+                    : 'You navigate with Google Maps, Waze or Apple Maps; GuiAgo explains each stop on arrival'}
+                </p>
+              </div>
+              <svg className="w-5 h-5 text-stone-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ======================================================
+  // PHASE: EXTERNAL OVERVIEW (POI list + export, no in-app guiding)
+  // ======================================================
+  if (phase === 'external_overview') {
+    const startPoint = userLocation ? { lat: userLocation[0], lon: userLocation[1] } : null
+    const fullRouteUrl = googleFullRouteUrl(pois, startPoint)
+    return (
+      <div className="flex flex-col h-screen bg-stone-900 safe-top">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3 z-10">
+          <button
+            onClick={() => setPhase('selecting_mode')}
+            className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-bold truncate">
+              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute.city.name}
+            </p>
+            <p className="text-stone-400 text-xs">
+              {pois.length} {language === 'es' ? 'paradas · navegación externa' : 'stops · external navigation'}
+            </p>
+          </div>
+          <button
+            onClick={() => setShowDownload(true)}
+            className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
+            title={language === 'es' ? 'Descargar para uso offline' : 'Download for offline use'}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Map overview */}
+        <div className="h-44 relative flex-shrink-0">
+          <MapView
+            pois={pois}
+            route={currentRoute}
+            userLocation={userLocation}
+            currentPOIIndex={0}
+            className="w-full h-full"
+          />
+        </div>
+
+        {/* Stops list */}
+        <div className="flex-1 overflow-y-auto px-4 py-3" style={{ WebkitOverflowScrolling: 'touch' }}>
+          {currentRoute?.story && (
+            <div className="bg-stone-800 rounded-2xl px-4 py-3 mb-3 flex items-start gap-2">
+              <span className="text-orange-400 flex-shrink-0 mt-0.5">✨</span>
+              <p className="text-stone-300 text-xs leading-relaxed italic">{currentRoute.story}</p>
+            </div>
+          )}
+          <div className="flex flex-col gap-1">
+            {pois.map((poi, idx) => {
+              const next = pois[idx + 1]
+              const links = next ? externalDirLinks(next, poi) : null
+              return (
+                <div key={poi.id}>
+                  <button
+                    onClick={() => explainPOIExternal(idx)}
+                    className="w-full flex items-center gap-3 p-3 rounded-2xl text-left bg-stone-800 active:bg-stone-700"
+                  >
+                    {poi.imageUrl ? (
+                      <img src={poi.imageUrl} alt={poi.name} className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-orange-500/20">
+                        <span className="text-lg font-black text-orange-400">{idx + 1}</span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-white truncate">{poi.name}</p>
+                      <p className="text-stone-400 text-xs capitalize">{poi.category}</p>
+                    </div>
+                    <span className="text-orange-400 text-xs font-semibold flex-shrink-0">
+                      🎧 {language === 'es' ? 'Explicar' : 'Explain'}
+                    </span>
+                  </button>
+                  {links && (
+                    <div className="flex items-center gap-1.5 px-3 py-1.5">
+                      <span className="text-stone-500 text-[11px] flex-shrink-0">
+                        {language === 'es' ? 'Ir a la siguiente:' : 'Go to next:'}
+                      </span>
+                      <a href={links.google} target="_blank" rel="noopener noreferrer" className="text-blue-400 text-[11px] font-semibold px-2 py-0.5 bg-stone-800 rounded-lg">Google</a>
+                      <a href={links.waze} target="_blank" rel="noopener noreferrer" className="text-cyan-400 text-[11px] font-semibold px-2 py-0.5 bg-stone-800 rounded-lg">Waze</a>
+                      <a href={links.apple} className="text-stone-300 text-[11px] font-semibold px-2 py-0.5 bg-stone-800 rounded-lg">Apple</a>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Bottom actions */}
+        <div className="bg-stone-900 px-4 pt-3 pb-4 safe-bottom border-t border-stone-800">
+          {fullRouteUrl && (
+            <a
+              href={fullRouteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full mb-2 py-3 bg-stone-800 text-blue-300 font-semibold rounded-2xl text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
+            >
+              🗺️ {language === 'es' ? 'Abrir ruta completa en Google Maps' : 'Open full route in Google Maps'}
+            </a>
+          )}
+          <button
+            onClick={() => explainPOIExternal(0)}
+            className="w-full py-4 bg-green-500 text-white font-black text-lg rounded-2xl shadow-xl shadow-green-900/50 active:scale-95 transition-transform flex items-center justify-center gap-3"
+          >
+            🎧 {language === 'es' ? `Empezar: explicar ${pois[0]?.name || '1ª parada'}` : `Start: explain ${pois[0]?.name || '1st stop'}`}
+          </button>
+        </div>
+
+        {showDownload && (
+          <BottomSheet isOpen onClose={() => setShowDownload(false)} title={language === 'es' ? 'Uso sin conexión' : 'Offline use'}>
+            <OfflineDownload route={currentRoute!} onComplete={() => setShowDownload(false)} />
+          </BottomSheet>
+        )}
       </div>
     )
   }
@@ -1005,9 +1323,9 @@ export function ActiveRoutePage() {
           )}
           <div className={`absolute inset-0 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-500 ${justArrived ? 'opacity-50' : 'opacity-100'}`} />
 
-          {/* Back to navigation */}
+          {/* Back: to in-app navigation (app mode) or to the stops overview (external mode) */}
           <button
-            onClick={() => { stopTTS(); setPhase('navigating') }}
+            onClick={() => { stopTTS(); setPhase(navMode === 'external' ? 'external_overview' : 'navigating') }}
             className="absolute top-[max(0.75rem,env(safe-area-inset-top))] left-4 w-10 h-10 bg-black/30 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1124,6 +1442,52 @@ export function ActiveRoutePage() {
                 >
                   🏁 {language === 'es' ? 'Finalizar ruta' : 'Finish route'}
                 </button>
+              ) : navMode === 'external' ? (
+                <>
+                  {nextPOIObj && (() => {
+                    const links = externalDirLinks(
+                      nextPOIObj,
+                      userLocation ? { lat: userLocation[0], lon: userLocation[1] } : currentPOI
+                    )
+                    return (
+                      <div className="mb-2">
+                        <p className="text-stone-500 text-xs font-semibold mb-1.5 text-center">
+                          {language === 'es'
+                            ? `Cómo llegar a: ${nextPOIObj.name}`
+                            : `How to get to: ${nextPOIObj.name}`}
+                        </p>
+                        <div className="flex gap-2 mb-2">
+                          <a href={links.google} target="_blank" rel="noopener noreferrer"
+                             className="flex-1 flex flex-col items-center gap-1 bg-blue-50 text-blue-600 text-xs font-semibold py-2.5 rounded-xl active:scale-95">
+                            <span className="text-lg">🗺️</span> Google Maps
+                          </a>
+                          <a href={links.waze} target="_blank" rel="noopener noreferrer"
+                             className="flex-1 flex flex-col items-center gap-1 bg-cyan-50 text-cyan-600 text-xs font-semibold py-2.5 rounded-xl active:scale-95">
+                            <span className="text-lg">🔵</span> Waze
+                          </a>
+                          <a href={links.apple}
+                             className="flex-1 flex flex-col items-center gap-1 bg-stone-100 text-stone-600 text-xs font-semibold py-2.5 rounded-xl active:scale-95">
+                            <span className="text-lg">🍎</span> Apple
+                          </a>
+                        </div>
+                      </div>
+                    )
+                  })()}
+                  <button
+                    onClick={advanceExternal}
+                    className="w-full py-4 bg-green-500 text-white font-black text-base rounded-2xl active:scale-95 transition-transform shadow-lg shadow-green-200 mb-2 flex items-center justify-center gap-2"
+                  >
+                    ✅ {language === 'es'
+                      ? `Ya estoy en ${nextPOIObj?.name || 'la siguiente'} — explicar`
+                      : `I'm at ${nextPOIObj?.name || 'the next stop'} — explain`}
+                  </button>
+                  <button
+                    onClick={() => setPhase('complete')}
+                    className="w-full text-center text-stone-400 text-sm py-1"
+                  >
+                    {language === 'es' ? 'Finalizar ruta aquí' : 'End route here'}
+                  </button>
+                </>
               ) : (
                 <>
                   <button
