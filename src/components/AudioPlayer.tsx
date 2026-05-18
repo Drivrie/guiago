@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { speak, stop, pause, resume, isSpeaking, isPaused, setRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
+import { speak, stop, pause, resume, isSpeaking, setRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
+import { startKeepAlive, stopKeepAlive } from '../services/backgroundKeepAlive'
 import { useAppStore } from '../stores/appStore'
 
 interface AudioPlayerProps {
@@ -25,12 +26,27 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
   useEffect(() => {
     return () => {
       stop()
+      stopKeepAlive().catch(() => {})
       // Clear MediaSession on unmount
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = null
       }
     }
   }, [])
+
+  // ---- Resume speech synthesis automatically when the user returns to the page.
+  //      Browsers may auto-pause TTS when the document becomes hidden; this makes
+  //      sure narration continues without needing a manual press of "Play". ----
+  useEffect(() => {
+    function onVisibility() {
+      if (document.visibilityState === 'visible' && playing) {
+        // speechSynthesis state on resume is unreliable across browsers — explicitly resume
+        try { window.speechSynthesis.resume() } catch { /* ignore */ }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [playing])
 
   // MediaSession API — lock screen controls on iOS/Android
   useEffect(() => {
@@ -57,6 +73,9 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
   useEffect(() => {
     if (!autoPlay || !text || !supported || hasAutoPlayed.current) return
     hasAutoPlayed.current = true
+    // Best-effort keep-alive on autoplay; silent audio may need a user gesture
+    // on iOS, but the wake lock + visibility handler will still kick in.
+    startKeepAlive().catch(() => {})
     // Small delay to let voices load on iOS
     const timer = setTimeout(() => {
       setRate(audioRate)
@@ -71,6 +90,12 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
 
   function handlePlay() {
     if (!supported) return
+
+    // Start the keep-alive loop synchronously inside the user gesture so the
+    // silent audio element is permitted to play on iOS / Safari. This keeps
+    // the page foregrounded for media purposes — TTS continues with the
+    // screen off or the user looking at another app.
+    startKeepAlive().catch(() => {})
 
     if (paused) {
       resume()

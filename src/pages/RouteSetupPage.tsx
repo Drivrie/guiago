@@ -151,6 +151,8 @@ export function RouteSetupPage() {
             }
           }
 
+          // Accept any AI-resolved POIs — STEP 2 always supplements from
+          // Wikipedia, so even a single good AI suggestion is worth keeping.
           if (resolvedPOIs.length > 0) {
             pois = resolvedPOIs
           }
@@ -204,7 +206,7 @@ export function RouteSetupPage() {
       // ============================================================
       // STEP 4 — Fallback route types (last resort when < 3 POIs)
       // ============================================================
-      if (pois.length < 3) {
+      if (pois.length < 2) {
         async function searchForType(rType: RouteType): Promise<POI[]> {
           setLoading(true, language === 'es' ? `Buscando en Wikipedia...` : 'Searching Wikipedia...')
           let results = await searchPOIsWikipedia(selectedCity!, rType, candidateTarget, language, visitedNames, radius)
@@ -223,19 +225,48 @@ export function RouteSetupPage() {
           return results
         }
 
-        for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
-          const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
-          setLoading(true, language === 'es'
-            ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
-            : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
-          const fbPOIs = await searchForType(fbType)
-          if (fbPOIs.length >= 3) {
-            pois = fbPOIs
-            usedRouteType = fbType
-            setFallbackInfo({ requested: selectedRouteType, found: fbType })
-            break
+        let found = await searchForType(selectedRouteType)
+
+        // Try fallback types ONLY when we have fewer than 2 POIs of the requested type.
+        // The previous threshold of 3 caused valid 2-stop routes in small cities to be
+        // wrongly replaced by an unrelated alternative type.
+        if (found.length < 2) {
+          for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
+            const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
+            setLoading(true, language === 'es'
+              ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
+              : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
+            const fbPOIs = await searchForType(fbType)
+            if (fbPOIs.length >= 2) {
+              found = fbPOIs
+              usedRouteType = fbType
+              setFallbackInfo({ requested: selectedRouteType, found: fbType })
+              break
+            }
           }
         }
+
+        // Final fallback: merge ALL fallback types into one combined set so that
+        // even very small towns with sparse data can still produce a usable route.
+        if (found.length < 2) {
+          const merged: POI[] = [...found]
+          const seenNames = new Set(merged.map(p => p.name.toLowerCase()))
+          for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
+            const fbPOIs = await searchForType(fbType)
+            for (const p of fbPOIs) {
+              if (!seenNames.has(p.name.toLowerCase())) {
+                merged.push(p); seenNames.add(p.name.toLowerCase())
+              }
+            }
+            if (merged.length >= 4) break
+          }
+          if (merged.length > found.length) {
+            found = merged
+            setFallbackInfo({ requested: selectedRouteType, found: selectedRouteType })
+          }
+        }
+
+        pois = found
       }
 
       if (pois.length === 0) {

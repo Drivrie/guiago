@@ -12,6 +12,7 @@ import { getAudioScript } from '../services/storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
 import { speak, stop as stopTTS } from '../services/tts'
+import { startKeepAlive, stopKeepAlive } from '../services/backgroundKeepAlive'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
@@ -46,7 +47,6 @@ export function ActiveRoutePage() {
   const [justArrived, setJustArrived] = useState(false)
   const [showNavigateTo, setShowNavigateTo] = useState(false)
   const [navigateToInput, setNavigateToInput] = useState('')
-  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const lastSpokenStepRef = useRef<number>(-1)
 
   const currentPOI = pois[currentPOIIndex]
@@ -77,27 +77,45 @@ export function ActiveRoutePage() {
     return () => navigator.geolocation.clearWatch(watch)
   }, [])
 
-  // ---- Wake Lock ----
+  // ---- Background keep-alive: wake lock + silent audio loop so navigation
+  // and TTS continue running with the screen off / app in background. ----
   useEffect(() => {
-    async function requestWL() {
-      if (!('wakeLock' in navigator)) return
-      try {
-        wakeLockRef.current = await (navigator as Navigator & {
-          wakeLock: { request: (type: string) => Promise<{ release: () => Promise<void> }> }
-        }).wakeLock.request('screen')
-      } catch { /* not supported or denied */ }
-    }
     if (phase === 'ready_to_start' || phase === 'navigating' || phase === 'at_poi' || phase === 'post_poi') {
-      requestWL()
+      startKeepAlive().catch(() => {})
     } else {
-      wakeLockRef.current?.release().catch(() => {})
-      wakeLockRef.current = null
+      stopKeepAlive().catch(() => {})
     }
     return () => {
-      wakeLockRef.current?.release().catch(() => {})
-      wakeLockRef.current = null
+      // Only fully stop when leaving the page (handled below in unmount-only effect)
     }
   }, [phase])
+
+  // ---- Hard cleanup on unmount: release everything ----
+  useEffect(() => {
+    return () => {
+      stopKeepAlive().catch(() => {})
+      stopTTS()
+    }
+  }, [])
+
+  // ---- Re-speak the current navigation step when the page becomes visible
+  //      again. Some browsers cancel pending speechSynthesis utterances when
+  //      the page is hidden; we want the user to immediately hear the next
+  //      instruction when they wake the screen. ----
+  useEffect(() => {
+    function onVisibility() {
+      if (document.visibilityState !== 'visible') return
+      // Try resuming any paused speech first
+      try { window.speechSynthesis.resume() } catch { /* ignore */ }
+      // Re-speak the active navigation instruction so the user picks up the thread
+      if (phase === 'navigating' && currentNavStep && !voiceMuted) {
+        const text = buildVoiceInstruction(currentNavStep, language)
+        speak(text, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [phase, currentNavStep, voiceMuted, language])
 
   // ---- GPS arrival detection (30m auto-arrive) ----
   useEffect(() => {
@@ -208,6 +226,10 @@ export function ActiveRoutePage() {
   // ---- Start navigation (from ready_to_start → navigating) ----
   function startNavigation() {
     stopTTS()
+    // Kick the keep-alive helper off inside the user gesture so iOS/Safari
+    // allow the silent audio loop to start. This is what keeps voice guidance
+    // and TTS active when the screen is locked or the app is backgrounded.
+    startKeepAlive().catch(() => {})
     const firstPOI = pois[0]
     if (!voiceMuted && firstPOI) {
       const firstStep = preRouteSegment?.steps?.[0]

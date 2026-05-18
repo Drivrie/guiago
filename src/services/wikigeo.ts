@@ -1,8 +1,53 @@
 import type { POI, RouteType, City, Language } from '../types'
 
-const WIKI_API = {
-  es: 'https://es.wikipedia.org/w/api.php',
-  en: 'https://en.wikipedia.org/w/api.php'
+// Wikipedia API endpoints by language code. Beyond `es` and `en`, we dynamically
+// derive the local-language Wikipedia for the city's country to surface POIs
+// that exist only in the country's native Wikipedia (the most common reason
+// why local-but-internationally-unknown places fail to appear).
+const WIKI_API_BASE = (lang: string) => `https://${lang}.wikipedia.org/w/api.php`
+
+const WIKI_API: Record<string, string> = {
+  es: WIKI_API_BASE('es'),
+  en: WIKI_API_BASE('en'),
+}
+
+// Country-code → primary Wikipedia language. Used to query the LOCAL Wikipedia
+// for cities whose POIs are documented mainly in the native language.
+const COUNTRY_TO_WIKI_LANG: Record<string, string> = {
+  ES: 'es', MX: 'es', AR: 'es', CL: 'es', CO: 'es', PE: 'es', VE: 'es', UY: 'es',
+  PY: 'es', BO: 'es', EC: 'es', CR: 'es', PA: 'es', CU: 'es', DO: 'es', GT: 'es',
+  HN: 'es', NI: 'es', SV: 'es', PR: 'es',
+  US: 'en', GB: 'en', IE: 'en', AU: 'en', NZ: 'en', CA: 'en', ZA: 'en',
+  FR: 'fr', BE: 'fr', LU: 'fr', MC: 'fr', CH: 'de', // CH multilingual but de largest
+  DE: 'de', AT: 'de', LI: 'de',
+  IT: 'it', SM: 'it', VA: 'it',
+  PT: 'pt', BR: 'pt', AO: 'pt', MZ: 'pt',
+  PL: 'pl', CZ: 'cs', SK: 'sk', HU: 'hu', RO: 'ro', BG: 'bg',
+  GR: 'el', CY: 'el',
+  NL: 'nl', DK: 'da', SE: 'sv', NO: 'no', FI: 'fi', IS: 'is', EE: 'et',
+  LV: 'lv', LT: 'lt',
+  RU: 'ru', UA: 'uk', BY: 'be',
+  TR: 'tr', IL: 'he', SA: 'ar', AE: 'ar', EG: 'ar', MA: 'ar', TN: 'ar', JO: 'ar',
+  IR: 'fa', IN: 'hi', PK: 'ur', BD: 'bn',
+  JP: 'ja', KR: 'ko', CN: 'zh', TW: 'zh', HK: 'zh', VN: 'vi', TH: 'th', ID: 'id',
+  MY: 'ms', PH: 'tl',
+  HR: 'hr', SI: 'sl', RS: 'sr', BA: 'bs', MK: 'mk', AL: 'sq',
+}
+
+/** Returns the local Wikipedia language code for a city's country, or null if unknown. */
+function localWikiLang(city: City): string | null {
+  if (!city.countryCode) return null
+  const code = city.countryCode.toUpperCase()
+  return COUNTRY_TO_WIKI_LANG[code] || null
+}
+
+/** Returns ranked list of Wikipedia languages to try for a city: [appLang, localLang, en] */
+function wikiLangsForCity(city: City, lang: Language): string[] {
+  const result: string[] = [lang === 'es' ? 'es' : 'en']
+  const local = localWikiLang(city)
+  if (local && !result.includes(local)) result.push(local)
+  if (!result.includes('en')) result.push('en')
+  return result
 }
 
 // Keywords per route type for scoring Wikipedia articles
@@ -93,7 +138,102 @@ function guessCategory(title: string, extract: string, routeType: RouteType): st
   return defaults[routeType]
 }
 
-// Search Wikipedia geosearch around a city, score by route type
+/** Geosearch radius derived from the city's bounding box (falls back to 5km). */
+function deriveSearchRadius(city: City): number {
+  if (city.boundingBox) {
+    const [minLat, maxLat, minLon, maxLon] = city.boundingBox
+    const latM = Math.abs(maxLat - minLat) * 111000
+    const midLat = (maxLat + minLat) / 2
+    const lonM = Math.abs(maxLon - minLon) * 111000 * Math.cos((midLat * Math.PI) / 180)
+    const halfDiag = Math.max(latM, lonM) / 2
+    // Cap between 4km (small towns must still get useful results) and 10km (Wikipedia max).
+    return Math.min(10000, Math.max(4000, Math.round(halfDiag * 1.2)))
+  }
+  return 5000
+}
+
+/** Single-language Wikipedia geosearch. */
+async function geosearchSingleLang(
+  city: City,
+  routeType: RouteType,
+  wikiLang: string,
+  excludeLower: string[],
+  radius: number
+): Promise<Array<POI & { _score: number; _lang: string }>> {
+  const base = WIKI_API[wikiLang] || WIKI_API_BASE(wikiLang)
+  try {
+    const geoParams = new URLSearchParams({
+      action: 'query',
+      list: 'geosearch',
+      gscoord: `${city.lat}|${city.lon}`,
+      gsradius: String(radius),
+      gslimit: '500',
+      format: 'json',
+      origin: '*',
+    })
+    const geoResp = await fetch(`${base}?${geoParams}`)
+    if (!geoResp.ok) return []
+    const geoData = await geoResp.json() as { query?: { geosearch?: Array<{ pageid: number; title: string; lat: number; lon: number }> } }
+    const geoResults = geoData.query?.geosearch || []
+    if (geoResults.length === 0) return []
+
+    // Batch fetch in chunks of 50 (MediaWiki pageids limit)
+    const pages: Record<string, { title?: string; extract?: string; thumbnail?: { source?: string } }> = {}
+    for (let i = 0; i < geoResults.length; i += 50) {
+      const slice = geoResults.slice(i, i + 50)
+      const pageIds = slice.map(r => r.pageid).join('|')
+      const extractParams = new URLSearchParams({
+        action: 'query',
+        pageids: pageIds,
+        prop: 'extracts|pageimages',
+        exintro: 'true',
+        exchars: '800',
+        pithumbsize: '600',
+        format: 'json',
+        origin: '*',
+      })
+      const extractResp = await fetch(`${base}?${extractParams}`)
+      if (!extractResp.ok) continue
+      const extractData = await extractResp.json() as { query?: { pages?: Record<string, { title?: string; extract?: string; thumbnail?: { source?: string } }> } }
+      Object.assign(pages, extractData.query?.pages || {})
+    }
+
+    const scored: Array<POI & { _score: number; _lang: string }> = []
+    for (const geoItem of geoResults) {
+      if (excludeLower.some(ex => geoItem.title.toLowerCase().includes(ex) || ex.includes(geoItem.title.toLowerCase()))) continue
+      if (!isPOINearCity(geoItem.lat, geoItem.lon, city)) continue
+      const page = pages[String(geoItem.pageid)]
+      const extract = cleanHtml(page?.extract || '')
+      // Tolerate short extracts: keep entry but with weaker score (raw geosearch hit)
+      if (!extract && !geoItem.title) continue
+
+      const score = scoreArticle(geoItem.title, extract, routeType)
+      scored.push({
+        id: `wiki-${wikiLang}-${geoItem.pageid}`,
+        name: geoItem.title,
+        lat: geoItem.lat,
+        lon: geoItem.lon,
+        category: guessCategory(geoItem.title, extract, routeType),
+        routeType,
+        description: extract || undefined,
+        imageUrl: page?.thumbnail?.source,
+        wikipediaTitle: geoItem.title,
+        estimatedVisitMinutes: guessVisitMinutes(geoItem.title, extract),
+        tags: { wikiLang },
+        _score: score + (extract.length > 200 ? 1 : 0),
+        _lang: wikiLang,
+      })
+    }
+    return scored
+  } catch (err) {
+    console.error(`geosearch[${wikiLang}] error:`, err)
+    return []
+  }
+}
+
+// Search Wikipedia geosearch around a city, score by route type. Queries app
+// language + the country's local language + English in parallel and merges
+// duplicates so that POIs documented only in the local Wikipedia surface too.
 export async function searchPOIsWikipedia(
   city: City,
   routeType: RouteType,
@@ -103,86 +243,44 @@ export async function searchPOIsWikipedia(
   radiusMeters: number = 4000
 ): Promise<POI[]> {
   try {
-    const wikiLang = lang === 'es' ? 'es' : 'en'
-    const base = WIKI_API[wikiLang]
     const excludeLower = excludeNames.map(n => n.toLowerCase())
+    // Union of both strategies: honour the caller's time-budget radius (main)
+    // but never search a smaller area than the bounding-box-derived minimum so
+    // small/local towns still return enough POIs (feature). Capped at 10km
+    // (Wikipedia geosearch max). The route builder trims to the time budget.
+    const radius = Math.min(10000, Math.max(radiusMeters, deriveSearchRadius(city)))
+    const langs = wikiLangsForCity(city, lang)
 
-    // Step 1: Geosearch around city center
-    const geoParams = new URLSearchParams({
-      action: 'query',
-      list: 'geosearch',
-      gscoord: `${city.lat}|${city.lon}`,
-      gsradius: String(Math.min(10000, Math.max(1000, radiusMeters))),
-      gslimit: '100',    // More candidates → better scoring pool
-      format: 'json',
-      origin: '*',
-    })
+    const perLang = await Promise.all(
+      langs.map(l => geosearchSingleLang(city, routeType, l, excludeLower, radius))
+    )
 
-    const geoResp = await fetch(`${base}?${geoParams}`)
-    if (!geoResp.ok) return []
-    const geoData = await geoResp.json() as { query?: { geosearch?: Array<{ pageid: number; title: string; lat: number; lon: number }> } }
-    const geoResults = geoData.query?.geosearch || []
-    if (geoResults.length === 0) return []
-
-    // Step 2: Batch fetch extracts + images + coordinates
-    const pageIds = geoResults.map(r => r.pageid).join('|')
-    const extractParams = new URLSearchParams({
-      action: 'query',
-      pageids: pageIds,
-      prop: 'extracts|pageimages',
-      exintro: 'true',
-      exchars: '800',
-      pithumbsize: '600',
-      format: 'json',
-      origin: '*',
-    })
-
-    const extractResp = await fetch(`${base}?${extractParams}`)
-    if (!extractResp.ok) return []
-    const extractData = await extractResp.json() as { query?: { pages?: Record<string, { extract?: string; thumbnail?: { source?: string } }> } }
-    const pages = extractData.query?.pages || {}
-
-    // Step 3: Score and filter
-    type ScoredPOI = POI & { _score: number }
-    const scored: ScoredPOI[] = []
-
-    for (const geoItem of geoResults) {
-      // Skip if already visited
-      if (excludeLower.some(ex => geoItem.title.toLowerCase().includes(ex) || ex.includes(geoItem.title.toLowerCase()))) continue
-
-      // Skip if POI coordinates fall outside the city bounds (extra safety check on top of gsradius)
-      if (!isPOINearCity(geoItem.lat, geoItem.lon, city)) continue
-
-      const page = pages[String(geoItem.pageid)]
-      if (!page?.extract) continue
-
-      const extract = cleanHtml(page.extract)
-      if (extract.length < 50) continue
-
-      const score = scoreArticle(geoItem.title, extract, routeType)
-
-      scored.push({
-        id: `wiki-${geoItem.pageid}`,
-        name: geoItem.title,
-        lat: geoItem.lat,
-        lon: geoItem.lon,
-        category: guessCategory(geoItem.title, extract, routeType),
-        routeType,
-        description: extract,
-        imageUrl: (page as { thumbnail?: { source?: string } }).thumbnail?.source,
-        wikipediaTitle: geoItem.title,
-        estimatedVisitMinutes: guessVisitMinutes(geoItem.title, extract),
-        tags: {},
-        _score: score,
-      })
+    // Merge: dedupe by (lat,lon) rounded — same POI in multiple wikis collapses to one entry.
+    const merged = new Map<string, POI & { _score: number; _lang: string }>()
+    for (const list of perLang) {
+      for (const poi of list) {
+        const key = `${poi.lat.toFixed(4)},${poi.lon.toFixed(4)}`
+        const existing = merged.get(key)
+        if (!existing) {
+          merged.set(key, poi)
+        } else {
+          // Prefer entry with richer description; merge image if missing
+          if ((poi.description?.length || 0) > (existing.description?.length || 0)) {
+            merged.set(key, { ...poi, imageUrl: poi.imageUrl || existing.imageUrl, _score: poi._score + existing._score })
+          } else {
+            existing.imageUrl = existing.imageUrl || poi.imageUrl
+            existing._score += poi._score
+          }
+        }
+      }
     }
 
-    // Step 4: Sort by relevance, use all if too few scored
+    const scored = Array.from(merged.values())
     scored.sort((a, b) => b._score - a._score)
     const relevant = scored.filter(p => p._score > 0)
-    const result = relevant.length >= 3 ? relevant : scored
+    const result = relevant.length >= 2 ? relevant : scored
 
-    return result.slice(0, maxPOIs).map(({ _score: _, ...poi }) => poi)
+    return result.slice(0, maxPOIs).map(({ _score: _, _lang: __, ...poi }) => poi)
   } catch (err) {
     console.error('wikigeo error:', err)
     return []
@@ -216,9 +314,9 @@ async function trySearchPOIInWiki(
   name: string,
   city: City,
   routeType: RouteType,
-  wikiLang: 'es' | 'en'
+  wikiLang: string
 ): Promise<POI | null> {
-  const base = WIKI_API[wikiLang]
+  const base = WIKI_API[wikiLang] || WIKI_API_BASE(wikiLang)
 
   // Search with city name AND country for disambiguation
   // e.g. "Wawel Castle Kraków Poland" instead of just "Wawel Castle Kraków"
@@ -311,19 +409,14 @@ export async function searchPOIByName(
   lang: Language = 'es'
 ): Promise<POI | null> {
   try {
-    const primaryLang = lang === 'es' ? 'es' : 'en'
-
-    // Try primary language first
-    const primary = await trySearchPOIInWiki(name, city, routeType, primaryLang)
-    if (primary) return primary
-
-    // Fallback to English Wikipedia (broader coverage for non-English/non-Spanish cities)
-    if (primaryLang !== 'en') {
-      const english = await trySearchPOIInWiki(name, city, routeType, 'en')
-      if (english) return english
+    // Try in priority order: app language → local-country language → English.
+    // Local-language search is essential for cities whose POIs are mainly
+    // documented in their native Wikipedia (e.g. small Polish/Czech towns).
+    const langs = wikiLangsForCity(city, lang)
+    for (const wikiLang of langs) {
+      const poi = await trySearchPOIInWiki(name, city, routeType, wikiLang)
+      if (poi) return poi
     }
-
-    // POI could not be verified near the city — reject to avoid cross-city contamination
     return null
   } catch (err) {
     console.error('searchPOIByName error:', err)
