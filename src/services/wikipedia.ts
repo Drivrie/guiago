@@ -110,7 +110,7 @@ async function fetchPOIFromMediaWiki(
       titles: name,
       prop: 'extracts|pageimages',
       exintro: 'true',
-      exchars: '1500',
+      exchars: '3000',
       pithumbsize: '600',
       format: 'json',
       origin: '*'
@@ -245,19 +245,10 @@ export async function getPOIInfoMultiSource(
   let wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
   let voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
 
-  // 3. If we still have nothing relevant and a city was given, retry with bare name as fallback
-  if ((!wiki || !articleMatchesCity(wiki, context)) &&
-      (!voyage || !articleMatchesCity(voyage, context)) &&
-      context?.cityName && scopedQuery !== name) {
-    const [bareWiki, bareVoyage] = await Promise.allSettled([
-      fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
-      fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
-    ])
-    if (!wiki) wiki = bareWiki.status === 'fulfilled' ? bareWiki.value : null
-    if (!voyage) voyage = bareVoyage.status === 'fulfilled' ? bareVoyage.value : null
-  }
-
-  // 4. If a city context exists, reject results that clearly belong elsewhere
+  // 3. If a city context exists, reject results that clearly belong elsewhere.
+  //    We deliberately do NOT retry with a bare name here: a bare-name fallback
+  //    is what causes "Catedral" in Burgos to return Sevilla's cathedral when
+  //    the scoped search finds nothing. Better to return null than to lie.
   if (context?.cityName) {
     if (wiki && !articleMatchesCity(wiki, context)) wiki = null
     if (voyage && !articleMatchesCity(voyage, context)) voyage = null
@@ -279,13 +270,24 @@ export async function getPOIInfoMultiSource(
   }
 }
 
-/** Heuristic: does the article's extract mention the requested city / country? */
+/**
+ * Heuristic: does the article actually belong to the requested city?
+ *
+ * Requires the city name to appear as a discrete WORD in title or extract
+ * (not just as a substring). The previous version accepted a country mention
+ * as sufficient — but a famous "Catedral" article that mentions "Spain"
+ * would then pass even if it's in Sevilla while the user is in Burgos.
+ * Country alone is no longer enough.
+ */
 function articleMatchesCity(article: WikiResult, context?: POILookupContext): boolean {
   if (!context?.cityName) return true
   const haystack = `${article.title} ${article.extract}`.toLowerCase()
-  if (haystack.includes(context.cityName.toLowerCase())) return true
-  if (context.country && haystack.includes(context.country.toLowerCase())) return true
-  return false
+  const city = context.cityName.toLowerCase().trim()
+  if (!city) return true
+  // Word-boundary match, with city name regex-escaped
+  const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const cityWord = new RegExp(`(^|[^\\p{L}])${escaped}([^\\p{L}]|$)`, 'iu')
+  return cityWord.test(haystack)
 }
 
 /**
@@ -335,6 +337,12 @@ async function searchPOIByGeo(
     }
     const pages = detailData.query?.pages || {}
 
+    // Rank candidate hits by distance to the user — pick the CLOSEST that fits
+    // within `radiusMeters`. Previously we picked the first hit Wikipedia
+    // returned, which could be a famous-but-far place when a closer (and more
+    // relevant) match was lower in the search ranking.
+    type Candidate = { distM: number; page: { pageid?: number; title?: string; extract?: string; thumbnail?: { source?: string } } }
+    const candidates: Candidate[] = []
     for (const hit of hits) {
       const page = pages[String(hit.pageid)]
       if (!page || page.missing !== undefined) continue
@@ -342,6 +350,11 @@ async function searchPOIByGeo(
       if (!coords) continue
       const distM = haversineMeters(lat, lon, coords.lat, coords.lon)
       if (distM > radiusMeters) continue
+      candidates.push({ distM, page })
+    }
+    candidates.sort((a, b) => a.distM - b.distM)
+
+    for (const { page } of candidates) {
       const extract = cleanWikiExtract(page.extract || '')
       if (!extract) continue
       return {
@@ -438,7 +451,7 @@ function pickPhrase(arr: string[], name: string): string {
 }
 
 export function generateAudioScript(
-  poi: { name: string; category: string; description?: string },
+  poi: { name: string; category: string; description?: string; insiderTip?: string },
   lang: Language
 ): string {
   const desc = poi.description || ''
@@ -448,8 +461,11 @@ export function generateAudioScript(
     .map(s => s.trim())
     .filter(s => s.length > 30)
 
-  const mainContent = sentences.slice(0, 3).join(' ')
-  const extraContent = sentences.slice(3, 5).join(' ')
+  // Richer narration when AI is unavailable: 5 main sentences + 3 extras
+  // (was 3+2) so the template script feels closer to a real audio guide.
+  const mainContent = sentences.slice(0, 5).join(' ')
+  const extraContent = sentences.slice(5, 8).join(' ')
+  const tip = poi.insiderTip?.trim()
 
   if (lang === 'en') {
     // Always start by asking visitor to look at the image to confirm they're at the right place
@@ -476,6 +492,7 @@ export function generateAudioScript(
     let script = imageConfirm + pickPhrase(openings, poi.name) + ' '
     if (mainContent) script += mainContent + ' '
     if (extraContent) script += pickPhrase(connectors, poi.name + 'x') + ' ' + extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
+    if (tip) script += `Insider tip: ${tip} `
     script += pickPhrase(closings, poi.name + 'z')
     return script
   }
@@ -511,6 +528,7 @@ export function generateAudioScript(
     script += connector + ' '
     script += extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
   }
+  if (tip) script += `Y un consejo de quien conoce este sitio: ${tip} `
   script += pickPhrase(closings, poi.name + 'z')
   return script
 }

@@ -146,14 +146,20 @@ export function TodayPage() {
       // Pass city context so the search is scoped to the user's locality —
       // prevents picking up an article about a place with the same name in
       // another city/country (e.g. "Catedral" returning Sevilla when the user
-      // is in Burgos).
-      const context = location ? {
-        cityName: location.city.name,
-        country: location.city.country,
-        countryCode: location.city.countryCode,
-        lat: userCoords?.[0] ?? location.city.lat,
-        lon: userCoords?.[1] ?? location.city.lon,
-      } : undefined
+      // is in Burgos). We always send coords if available — even when the
+      // city couldn't be reverse-geocoded — so the strict geo-validation in
+      // getPOIInfoMultiSource kicks in either way.
+      const context = {
+        cityName: location?.city.name,
+        country: location?.city.country,
+        countryCode: location?.city.countryCode,
+        lat: userCoords?.[0] ?? location?.city.lat,
+        lon: userCoords?.[1] ?? location?.city.lon,
+        // Tighter radius for the "search a POI" flow than the default 6km:
+        // the user is asking about a specific place near them, not anywhere
+        // in the metro area.
+        radiusMeters: 4000,
+      }
 
       const result = await getPOIInfoMultiSource(query.trim(), language, context)
       if (!result) {

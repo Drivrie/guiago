@@ -375,7 +375,7 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
     currentLon = ordered[0].lon
   }
 
-  // Nearest neighbor algorithm
+  // Greedy nearest-neighbour pass
   while (unvisited.length > 0) {
     let nearestIdx = 0
     let nearestDist = Infinity
@@ -394,5 +394,90 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
     currentLon = nearest.lon
   }
 
-  return ordered
+  // 2-opt improvement: greedy nearest-neighbour often produces routes with
+  // path crossings ("zigzags") that a quick local-search pass can eliminate.
+  // This is the same technique used by walking-tour route planners — it
+  // visits the same set of POIs but in a smoother order, removing the
+  // un-realistic detours that made routes feel un-professional.
+  return twoOptImprove(ordered, startLat, startLon)
+}
+
+/**
+ * 2-opt local-search improvement over a POI sequence. Repeatedly tries
+ * reversing each [i..j] sub-tour and keeps the change if it reduces total
+ * walking distance (origin → POIs → end). Converges in O(n²) per pass; we
+ * cap at 50 passes which is far more than needed for typical N ≤ 14.
+ */
+function twoOptImprove<T extends { lat: number; lon: number }>(
+  route: T[],
+  startLat?: number,
+  startLon?: number,
+  maxPasses: number = 50
+): T[] {
+  if (route.length < 4) return route
+  const hasStart = startLat !== undefined && startLon !== undefined
+  const start: { lat: number; lon: number } | null = hasStart ? { lat: startLat, lon: startLon } : null
+
+  // Local helper to fetch the predecessor coordinate at index i.
+  const predecessorOf = (current: T[], i: number): { lat: number; lon: number } => {
+    if (i === 0) return start ?? current[0]
+    return current[i - 1]
+  }
+
+  let best = [...route]
+  let improved = true
+  let pass = 0
+  while (improved && pass < maxPasses) {
+    improved = false
+    pass++
+    for (let i = 0; i < best.length - 1; i++) {
+      for (let j = i + 1; j < best.length; j++) {
+        const a = predecessorOf(best, i)
+        const b = best[i]
+        const c = best[j]
+        const d = j + 1 < best.length ? best[j + 1] : null
+        // Distance of the two edges we'd cut vs the two edges we'd create.
+        const dBefore = calculateDistance(a.lat, a.lon, b.lat, b.lon) +
+          (d ? calculateDistance(c.lat, c.lon, d.lat, d.lon) : 0)
+        const dAfter = calculateDistance(a.lat, a.lon, c.lat, c.lon) +
+          (d ? calculateDistance(b.lat, b.lon, d.lat, d.lon) : 0)
+        if (dAfter + 1e-6 < dBefore) {
+          // Reverse the slice [i..j] in place
+          const reversed = best.slice(i, j + 1).reverse()
+          best = [...best.slice(0, i), ...reversed, ...best.slice(j + 1)]
+          improved = true
+        }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Drops outlier POIs whose distance to BOTH neighbours exceeds maxStepMeters.
+ * Prevents a single far-away point from making the route feel un-realistic
+ * (a real walking tour never has a 2 km detour between consecutive stops).
+ * Edge POIs (first / last) are left untouched.
+ */
+export function pruneOutlierPOIs<T extends { lat: number; lon: number }>(
+  ordered: T[],
+  maxStepMeters: number = 1500
+): T[] {
+  if (ordered.length <= 3) return ordered
+  const result = [...ordered]
+  let i = 1 // skip first
+  while (i < result.length - 1) {
+    const prev = result[i - 1]
+    const next = result[i + 1]
+    const here = result[i]
+    const dPrev = calculateDistance(here.lat, here.lon, prev.lat, prev.lon)
+    const dNext = calculateDistance(here.lat, here.lon, next.lat, next.lon)
+    if (dPrev > maxStepMeters && dNext > maxStepMeters) {
+      result.splice(i, 1)
+      // Re-check this index against the new neighbours (do not increment)
+    } else {
+      i++
+    }
+  }
+  return result
 }

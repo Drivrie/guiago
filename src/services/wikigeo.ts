@@ -1,4 +1,5 @@
 import type { POI, RouteType, City, Language } from '../types'
+import { fetchSitelinksCounts } from './wikidata'
 
 // Wikipedia API endpoints by language code. Beyond `es` and `en`, we dynamically
 // derive the local-language Wikipedia for the city's country to surface POIs
@@ -79,15 +80,34 @@ function cleanHtml(html: string): string {
 
 function scoreArticle(title: string, extract: string, routeType: RouteType): number {
   const text = `${title} ${extract.slice(0, 400)}`
+  // Article-length bonus: deeper Wikipedia articles correlate with more important landmarks.
+  const lengthBonus = extract.length > 1500 ? 4 : extract.length > 800 ? 3 : extract.length > 400 ? 2 : extract.length > 200 ? 1 : 0
+  // Heritage / UNESCO / national-monument status is a strong signal of touristic importance.
+  const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building|denkmalliste/i.test(extract) ? 6 : 0
   if (routeType === 'imprescindibles') {
-    // Score highest overall landmark coverage
     const allMatches = (text.match(ALL_KEYWORDS_RE) || []).length
-    // Bonus for "famous/emblematic" language
-    const notorietyBonus = /turístico|famoso|emblemático|icónico|símbolo|principal|destacad|patrimonio|unesco|known for|famous/i.test(text) ? 3 : 0
-    return allMatches + notorietyBonus
+    const notorietyBonus = /turístico|famoso|emblemático|icónico|símbolo|principal|destacad|patrimonio|unesco|known for|famous|landmark|iconic|renowned|world-famous/i.test(text) ? 4 : 0
+    return allMatches + notorietyBonus + lengthBonus + heritageBonus
   }
   const re = new RegExp(ROUTE_KEYWORDS[routeType].source, 'gi')
-  return (text.match(re) || []).length
+  return (text.match(re) || []).length + lengthBonus + heritageBonus
+}
+
+/** Sitelinks weight per route type — how much international fame matters
+ *  for each kind of route. Iconic-landmark routes weight it heavily;
+ *  "local secrets" routes weight it inversely (we actually want LESS famous). */
+function fameWeight(routeType: RouteType): number {
+  switch (routeType) {
+    case 'imprescindibles': return 1.0
+    case 'monumental': return 0.9
+    case 'arquitectura': return 0.7
+    case 'historia_negra': return 0.4
+    case 'gastronomia': return 0.4
+    case 'curiosidades': return 0.4
+    case 'naturaleza': return 0.5
+    case 'secretos_locales': return 0.1  // local secrets are by definition not internationally famous
+    default: return 0.5
+  }
 }
 
 /** Realistic visit times for a walking-tour stop (not a deep interior visit). */
@@ -177,15 +197,24 @@ async function geosearchSingleLang(
     const geoResults = geoData.query?.geosearch || []
     if (geoResults.length === 0) return []
 
-    // Batch fetch in chunks of 50 (MediaWiki pageids limit)
-    const pages: Record<string, { title?: string; extract?: string; thumbnail?: { source?: string } }> = {}
+    // Batch fetch in chunks of 50 (MediaWiki pageids limit). We also request
+    // `pageprops` (specifically `wikibase_item`, the Wikidata Q-id) so we can
+    // re-rank by international fame via sitelinks later — see fetchSitelinksCounts.
+    type WikiPage = {
+      title?: string
+      extract?: string
+      thumbnail?: { source?: string }
+      pageprops?: { wikibase_item?: string }
+    }
+    const pages: Record<string, WikiPage> = {}
     for (let i = 0; i < geoResults.length; i += 50) {
       const slice = geoResults.slice(i, i + 50)
       const pageIds = slice.map(r => r.pageid).join('|')
       const extractParams = new URLSearchParams({
         action: 'query',
         pageids: pageIds,
-        prop: 'extracts|pageimages',
+        prop: 'extracts|pageimages|pageprops',
+        ppprop: 'wikibase_item',
         exintro: 'true',
         exchars: '800',
         pithumbsize: '600',
@@ -194,7 +223,7 @@ async function geosearchSingleLang(
       })
       const extractResp = await fetch(`${base}?${extractParams}`)
       if (!extractResp.ok) continue
-      const extractData = await extractResp.json() as { query?: { pages?: Record<string, { title?: string; extract?: string; thumbnail?: { source?: string } }> } }
+      const extractData = await extractResp.json() as { query?: { pages?: Record<string, WikiPage> } }
       Object.assign(pages, extractData.query?.pages || {})
     }
 
@@ -208,6 +237,7 @@ async function geosearchSingleLang(
       if (!extract && !geoItem.title) continue
 
       const score = scoreArticle(geoItem.title, extract, routeType)
+      const qid = page?.pageprops?.wikibase_item
       scored.push({
         id: `wiki-${wikiLang}-${geoItem.pageid}`,
         name: geoItem.title,
@@ -219,7 +249,7 @@ async function geosearchSingleLang(
         imageUrl: page?.thumbnail?.source,
         wikipediaTitle: geoItem.title,
         estimatedVisitMinutes: guessVisitMinutes(geoItem.title, extract),
-        tags: { wikiLang },
+        tags: { wikiLang, ...(qid ? { wikidata: qid } : {}) },
         _score: score + (extract.length > 200 ? 1 : 0),
         _lang: wikiLang,
       })
@@ -277,6 +307,34 @@ export async function searchPOIsWikipedia(
 
     const scored = Array.from(merged.values())
     scored.sort((a, b) => b._score - a._score)
+
+    // International-fame re-rank via Wikidata sitelinks. For the top ~30
+    // candidates we batch-fetch the number of Wikipedia editions that link
+    // to each entity (world-famous landmarks: 50-200+; minor local sites: 1-3),
+    // and fold that into the score. The weight per route type lets routes like
+    // "secretos_locales" deliberately favour LESS famous sites.
+    const TOP_FOR_FAME = Math.min(30, scored.length)
+    const topQids = scored.slice(0, TOP_FOR_FAME)
+      .map(p => p.tags?.wikidata)
+      .filter((q): q is string => !!q)
+    const sitelinks = await fetchSitelinksCounts(topQids)
+    const weight = fameWeight(routeType)
+    if (sitelinks.size > 0) {
+      for (const p of scored.slice(0, TOP_FOR_FAME)) {
+        const qid = p.tags?.wikidata
+        if (!qid) continue
+        const links = sitelinks.get(qid) || 0
+        if (links <= 0) continue
+        // sitelinks → fame bonus: scaled by route-type weight, capped to keep
+        // famous-but-thematically-wrong POIs from dominating. A weight of 1.0
+        // and 60 sitelinks → +24 bonus (large but bounded).
+        const bonus = Math.min(28, Math.round(links * weight * 0.45))
+        p._score += bonus
+      }
+      // Re-sort after fame fold-in
+      scored.sort((a, b) => b._score - a._score)
+    }
+
     const relevant = scored.filter(p => p._score > 0)
     const result = relevant.length >= 2 ? relevant : scored
 

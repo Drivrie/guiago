@@ -215,60 +215,70 @@ export async function generateAIRoute(
 
   const system =
     lang === 'es'
-      ? `Eres un guía turístico profesional de élite, del nivel de los mejores guías de Civitatis o Walkative. Conoces en profundidad la historia, cultura, arquitectura y secretos de todas las ciudades del mundo. Creas rutas turísticas memorables, coherentes y narrativas. Diseñas rutas ÁGILES: paradas próximas entre sí (máximo 600-800m entre paradas consecutivas) para que la ruta sea fluida y disfrutable. Siempre respondes exclusivamente con JSON válido, sin texto adicional, sin markdown.`
-      : `You are an elite professional tour guide, on par with the best guides from Civitatis or Walkative. You deeply know the history, culture, architecture and secrets of cities worldwide. You create memorable, coherent and narrative tours. You design AGILE routes: stops close to each other (max 600-800m between consecutive stops) for a smooth, enjoyable walk. Always respond exclusively with valid JSON, no additional text, no markdown.`
+      ? `Eres un guía turístico profesional de élite, al nivel de los autores de Lonely Planet, National Geographic Traveler y los guías presenciales de Civitatis y Walkative. Conoces en profundidad la historia, cultura, arquitectura y anécdotas de cada ciudad del mundo. Diseñas rutas memorables, coherentes y narrativas, con paradas próximas entre sí (máximo 600-800m) para que sea fluida y disfrutable a pie. Siempre respondes EXCLUSIVAMENTE con JSON válido — sin texto adicional, sin markdown, sin comentarios.`
+      : `You are an elite professional tour guide, on par with Lonely Planet and National Geographic Traveler authors and the in-person guides at Civitatis and Walkative. You deeply know the history, culture, architecture and anecdotes of every city in the world. You design memorable, coherent and narrative tours with stops close together (max 600-800m) so they flow smoothly on foot. You always respond EXCLUSIVELY with valid JSON — no additional text, no markdown, no comments.`
 
   const user =
     lang === 'es'
-      ? `Diseña una ruta turística de MÁXIMA CALIDAD para ${locationDesc}:
+      ? `Diseña una ruta turística de NIVEL LONELY PLANET / NATIONAL GEOGRAPHIC para ${locationDesc}:
 - Temática: ${typeDesc}
 - Duración total de visita: ${durationMinutes} minutos (sin contar desplazamientos)
 - Número de paradas: ${maxPOIs}${excludeClause}
 
-REQUISITOS ESTRICTOS (al nivel de Civitatis o Walkative):
-1. TODOS los lugares deben estar físicamente EN ${locationDesc} — no en otras ciudades, provincias ni países
-2. Los nombres de los lugares deben ser los nombres LOCALES u oficiales usados en Wikipedia, en el idioma original del país (por ejemplo, si la ciudad es polaca, usar nombres polacos o en inglés reconocibles)
-3. Distancia máxima entre paradas consecutivas: 600-800 metros a pie
-4. Orden geográfico óptimo para caminar sin rodeos — ruta circular o lineal lógica
-5. Coherencia temática perfecta — cada parada refuerza el hilo narrativo
-6. Información histórica específica y verificable, no genérica
-7. Consejos insider reales: horarios óptimos, entradas, trucos locales, qué evitar
+REGLA Nº 1 — RELEVANCIA REAL:
+${routeType === 'secretos_locales'
+  ? 'Selecciona joyas locales auténticas — sitios que un guía local llevaría a un amigo, no las trampas turísticas evidentes. PROHIBIDO usar los top-3 más obvios de la ciudad.'
+  : `Selecciona los lugares MÁS ICÓNICOS Y MUNDIALMENTE RECONOCIBLES de ${locationDesc}, ordenados estrictamente por fama internacional y relevancia turística — los que aparecerían en la portada de una guía Lonely Planet o National Geographic. NUNCA elijas un lugar de segunda fila si hay un equivalente más emblemático sin visitar. La parada nº 1 debe ser EL símbolo de la ciudad.`}
+
+REQUISITOS ESTRICTOS:
+1. TODOS los lugares deben estar FÍSICAMENTE en ${locationDesc} — no en otras ciudades, regiones ni países. Si dudas, NO lo incluyas.
+2. Usa los nombres OFICIALES exactamente como aparecen en Wikipedia (idioma local del país o inglés reconocible). Ejemplos: "Wawel Royal Castle" no "Castillo Wawel"; "Catedral de Burgos" no "Cathedral of Burgos".
+3. Distancia máxima entre paradas consecutivas: 600-800 metros a pie. Si dos POIs están más lejos, sustituye uno por algo más cercano que mantenga la coherencia.
+4. Orden geográfico óptimo — ruta circular o lineal lógica, SIN cruces ni zigzags. La parada nº 1 cerca de un acceso natural (estación, plaza principal) y la última cerca de un buen sitio para acabar.
+5. Coherencia temática perfecta — cada parada refuerza el hilo narrativo de la ruta.
+6. Información histórica ESPECÍFICA y verificable: fechas concretas, nombres de protagonistas, eventos reales. Nada de descripciones genéricas.
+7. Insider tips REALES: hora óptima, taquilla, qué pedir, dónde sentarse, qué evitar. Si no conoces algo verificable para ese sitio, devuelve null — NO inventes.
 
 JSON exacto (sin texto fuera del JSON):
 {
-  "routeStory": "Narrativa de apertura evocadora en 2-3 frases: describe la atmósfera, el hilo conductor y por qué esta ruta es especial. Estilo literario, apasionado, que invite a explorar.",
+  "routeStory": "Narrativa de apertura evocadora en 2-3 frases: atmósfera, hilo conductor, por qué esta ruta merece la pena hoy. Estilo Lonely Planet — literario pero directo, apasionado, que invite a salir ya.",
   "suggestedPOIs": [
     {
-      "name": "Nombre oficial completo y exacto del lugar en ${locationDesc} — preferiblemente en inglés o el idioma local, como aparece en Wikipedia",
+      "name": "Nombre oficial completo en ${locationDesc} tal como aparece en Wikipedia (idioma local o inglés)",
       "category": "categoría precisa (catedral/museo/plaza/palacio/jardín/mercado/barrio/iglesia/etc)",
-      "reason": "Por qué es imprescindible en esta ruta: 1-2 datos históricos o culturales fascinantes y específicos",
-      "insiderTip": "Consejo práctico y concreto: hora mejor para visitar, entrada gratuita, detalle que pocos conocen, qué pedir, dónde sentarse. null si no hay nada relevante."
+      "reason": "Por qué este lugar concreto en esta posición de la ruta: 1-2 datos históricos o culturales específicos y memorables",
+      "insiderTip": "Consejo práctico verificable: mejor hora, entrada gratuita, detalle que pocos notan, qué pedir, mejor punto fotográfico. null si no hay nada relevante o no estás seguro."
     }
   ]
 }`
-      : `Design a MAXIMUM QUALITY tour for ${locationDesc}:
+      : `Design a LONELY PLANET / NATIONAL GEOGRAPHIC level tour for ${locationDesc}:
 - Theme: ${typeDesc}
 - Total visit duration: ${durationMinutes} minutes (excluding walking)
 - Number of stops: ${maxPOIs}${excludeClause}
 
-STRICT REQUIREMENTS (Civitatis / Walkative level):
-1. ALL places must be physically IN ${locationDesc} — not in other cities, regions, or countries
-2. Use the LOCAL or official Wikipedia name for each place (e.g. for a Polish city, use Polish or internationally recognised English names)
-3. Max walking distance between consecutive stops: 600-800 meters
-4. Optimal geographic order — no unnecessary backtracking, logical circular or linear route
-5. Perfect thematic coherence — every stop reinforces the narrative thread
-6. Specific, verifiable historical information — not generic descriptions
-7. Real insider tips: optimal visit times, tickets, local tricks, what to avoid
+RULE Nº 1 — REAL RELEVANCE:
+${routeType === 'secretos_locales'
+  ? 'Pick authentic local gems — places a local guide would take a friend, not the obvious tourist traps. DO NOT use the city\'s most obvious top-3 sites.'
+  : `Pick the MOST ICONIC AND WORLDWIDE RECOGNISABLE places in ${locationDesc}, strictly ranked by international fame and touristic relevance — the ones that would appear on a Lonely Planet or National Geographic cover. NEVER pick a second-tier place when a more emblematic equivalent has not been visited. Stop #1 must be THE symbol of the city.`}
 
-Exact JSON (no text outside JSON):
+STRICT REQUIREMENTS:
+1. ALL places must be PHYSICALLY in ${locationDesc} — not in other cities, regions or countries. If unsure, leave it out.
+2. Use OFFICIAL names exactly as they appear on Wikipedia (local language or widely recognised English). Examples: "Wawel Royal Castle" not "Castillo Wawel"; "Burgos Cathedral" not "Catedral de Burgos".
+3. Maximum distance between consecutive stops: 600-800 metres on foot. If two POIs are further, replace one with something closer that fits the theme.
+4. Optimal geographic order — circular or linear logical route, NO crossings or zigzags. Stop #1 near a natural entry point (station, main square); last stop near a good place to end.
+5. Perfect thematic coherence — every stop reinforces the route's narrative thread.
+6. SPECIFIC, verifiable historical information: concrete dates, protagonist names, real events. No generic descriptions.
+7. REAL insider tips: optimal time, ticket booth, what to order, where to sit, what to avoid. If you don't know something verifiable for that site, return null — DO NOT invent.
+
+Exact JSON (no text outside the JSON):
 {
-  "routeStory": "Evocative opening narrative in 2-3 sentences: describe the atmosphere, the connecting thread, why this route is special. Literary, passionate style that invites exploration.",
+  "routeStory": "Evocative opening narrative in 2-3 sentences: atmosphere, connecting thread, why this route is worth doing today. Lonely Planet style — literary but direct, passionate, inviting the reader to step out now.",
   "suggestedPOIs": [
     {
-      "name": "Official full exact name of the place in ${locationDesc} — preferably in English or local language as it appears on Wikipedia",
+      "name": "Official full name in ${locationDesc} as it appears on Wikipedia (local language or English)",
       "category": "precise category (cathedral/museum/square/palace/garden/market/neighborhood/church/etc)",
-      "reason": "Why it's essential on this route: 1-2 fascinating, specific historical or cultural facts",
-      "insiderTip": "Practical, concrete tip: best time to visit, free entry, detail few people know, what to order, where to sit. null if nothing relevant."
+      "reason": "Why this specific place at this position in the route: 1-2 specific, memorable historical or cultural facts",
+      "insiderTip": "Verifiable practical tip: best time, free entry, detail few notice, what to order, best photo spot. null if nothing relevant or unsure."
     }
   ]
 }`
@@ -319,35 +329,39 @@ export async function generateAIAudioScript(
     lang === 'es'
       ? `Genera la narración de audio AL LLEGAR a "${poiName}" (${category}).
 
-${wikiDescription ? `Contexto histórico: ${wikiDescription.slice(0, 350)}` : ''}
-${reason ? `Por qué es especial: ${reason}` : ''}
-${insiderTip ? `Dato insider: ${insiderTip}` : ''}
+${wikiDescription ? `Contexto histórico verificado (úsalo para extraer fechas, nombres, eventos):\n${wikiDescription.slice(0, 1200)}` : ''}
+${reason ? `\nPor qué es especial en esta ruta: ${reason}` : ''}
+${insiderTip ? `\nDato insider verificado: ${insiderTip}` : ''}
 
-ESTRUCTURA OBLIGATORIA:
-0. PRIMERO (1-2 frases): pide al visitante que mire la imagen en pantalla para confirmar que está en el lugar correcto. Ej: "Mira la imagen que aparece en tu pantalla, ¿ves [descripción breve de la imagen]? ¡Eso es ${poiName}! Comprueba que estás frente a él."
-1. Abre con algo que capture atención AL INSTANTE: una pregunta sorprendente, una imagen vívida, o un dato impactante. NO empieces con "Bienvenido" ni "Aquí estamos".
-2. Cuenta 1-2 datos fascinantes y concretos de forma conversacional, como si se los contaras a un amigo
-3. Si hay insider tip, preséntalo como un secreto exclusivo: "Poca gente lo sabe, pero..."
-4. Cierra con algo que invite a disfrutar el momento: "Tómate un minuto para...", "Antes de seguir, mira hacia..."
+ESTRUCTURA OBLIGATORIA (siete bloques cortos, en este orden):
+0. CONFIRMACIÓN VISUAL (1-2 frases): "Mira la imagen en tu pantalla — ¿ves [descripción breve y reconocible de lo que aparece]? Eso es ${poiName}, comprueba que lo tienes delante."
+1. HOOK INMEDIATO (1-2 frases): una pregunta sorprendente, una imagen vívida o un dato impactante que enganche al instante. NUNCA "Bienvenido" o "Aquí estamos".
+2. HISTORIA CON DATOS (2-3 frases): 2-3 hechos históricos CONCRETOS extraídos del contexto — fechas, nombres de protagonistas, eventos reales. Estilo "te lo cuento como a un amigo", no enciclopédico.
+3. DATO CURIOSO O ANÉCDOTA (1-2 frases): algo memorable, sorprendente o poco conocido — una leyenda, una rareza arquitectónica, una historia humana. Lo que la gente recuerda al volver del viaje.
+4. SIGNIFICADO CULTURAL (1 frase): por qué este lugar importa hoy — qué representa para la ciudad, qué simboliza, qué cambió.
+5. INSIDER TIP (1 frase): si hay tip verificado, preséntalo como secreto: "Poca gente sabe que..." o "Mi consejo: ...". Si no hay tip fiable, omite este bloque.
+6. CIERRE INVITANTE (1 frase): "Tómate un minuto para...", "Antes de seguir, fíjate en...", "Acércate y observa..."
 
-120-160 palabras. SOLO la narración, sin comillas, sin títulos, sin guiones. Voz viva, apasionada, personal.`
+LONGITUD: 220-300 palabras. Voz viva, apasionada, en español de España, tuteo. Estilo Lonely Planet / Civitatis presencial. SOLO la narración, sin comillas, sin títulos, sin guiones, sin viñetas. Si los datos del contexto son escasos, sé conciso pero específico — no rellenes con tópicos.`
       : `Generate audio narration ARRIVING AT "${poiName}" (${category}).
 
-${wikiDescription ? `Historical context: ${wikiDescription.slice(0, 350)}` : ''}
-${reason ? `Why it's special: ${reason}` : ''}
-${insiderTip ? `Insider tip: ${insiderTip}` : ''}
+${wikiDescription ? `Verified historical context (use it to extract dates, names, events):\n${wikiDescription.slice(0, 1200)}` : ''}
+${reason ? `\nWhy it's special on this route: ${reason}` : ''}
+${insiderTip ? `\nVerified insider tip: ${insiderTip}` : ''}
 
-REQUIRED STRUCTURE:
-0. FIRST (1-2 sentences): ask the visitor to look at the image on screen to confirm they're at the right place. E.g.: "Take a look at the image on your screen — do you see [brief image description]? That's ${poiName}! Make sure you're standing in front of it."
-1. Open with something that grabs attention INSTANTLY: a surprising question, a vivid image, or a shocking fact. Do NOT start with "Welcome" or "Here we are".
-2. Share 1-2 fascinating, concrete facts conversationally, as if telling a friend
-3. If there's an insider tip, present it as an exclusive secret: "Not many people know that..."
-4. Close with something that invites them to enjoy the moment: "Take a minute to...", "Before we move on, look towards..."
+REQUIRED STRUCTURE (seven short blocks, in this order):
+0. VISUAL CONFIRMATION (1-2 sentences): "Take a look at the image on your screen — do you see [brief, recognisable description of what's shown]? That's ${poiName}; make sure it's right in front of you."
+1. IMMEDIATE HOOK (1-2 sentences): a surprising question, a vivid image or a striking fact. NEVER "Welcome" or "Here we are".
+2. STORY WITH FACTS (2-3 sentences): 2-3 CONCRETE historical facts from the context — dates, protagonists' names, real events. "Telling a friend" tone, not encyclopedic.
+3. CURIOUS DETAIL OR ANECDOTE (1-2 sentences): something memorable, surprising or little-known — a legend, an architectural quirk, a human story. The thing travellers remember when they get home.
+4. CULTURAL SIGNIFICANCE (1 sentence): why this place matters today — what it stands for, what it symbolises, what it changed.
+5. INSIDER TIP (1 sentence): if there's a verified tip, present it as a secret: "Few people know that..." or "My tip: ...". If no reliable tip, skip this block.
+6. INVITING CLOSE (1 sentence): "Take a minute to...", "Before we move on, look at...", "Step closer and notice..."
 
-120-160 words. ONLY the narration, no quotes, no titles, no dashes. Lively, passionate, personal voice.`
+LENGTH: 220-300 words. Lively, passionate voice. Lonely Planet / in-person Civitatis style. ONLY the narration, no quotes, no titles, no dashes, no bullets. If the context data is sparse, stay concise but specific — don't pad with clichés.`
 
   try {
-    return await callAI(system, user, getAIKey(userKey), 500)
+    return await callAI(system, user, getAIKey(userKey), 900)
   } catch (err) {
     console.error('AI audio script error:', err)
     return null
@@ -374,33 +388,35 @@ export async function generateAIPOIExplanation(
 
   const user =
     lang === 'es'
-      ? `Genera una explicación de audio sobre "${poiName}" en ${cityName}.
+      ? `Genera una explicación de audio sobre "${poiName}"${cityName ? ` en ${cityName}` : ''}.
 
-${description ? `Información de base: ${description.slice(0, 400)}` : ''}
+${description ? `Información de base verificada (extrae fechas, nombres, eventos):\n${description.slice(0, 1200)}` : ''}
 
-ESTRUCTURA:
-0. Empieza pidiendo al visitante que mire la imagen en pantalla: "Mira la imagen que aparece, ¿ves [descripción visual breve]? Eso es ${poiName}." (1-2 frases)
-1. Un dato histórico o cultural sorprendente y concreto (no genérico)
-2. Qué ver específicamente: dónde mirar, qué detalle no perderse
-3. Un consejo práctico insider: mejor hora, entrada, secreto local
-4. Cierra invitando a explorar
+ESTRUCTURA OBLIGATORIA (seis bloques cortos):
+0. CONFIRMACIÓN VISUAL (1-2 frases): "Mira la imagen en pantalla — ¿ves [descripción visual breve y reconocible]? Eso es ${poiName}."
+1. HOOK INMEDIATO (1 frase): pregunta sorprendente, imagen vívida o dato impactante que enganche al instante.
+2. HISTORIA CON DATOS (2-3 frases): 2-3 hechos concretos extraídos de la información de base — fechas, protagonistas, eventos reales. NO genéricos.
+3. ANÉCDOTA O CURIOSIDAD (1-2 frases): leyenda, detalle arquitectónico, historia humana — lo que se recuerda al volver del viaje.
+4. INSIDER TIP (1 frase): consejo práctico verificable (mejor hora, entrada, secreto). Si no hay nada fiable, omite este bloque — NO inventes.
+5. CIERRE INVITANTE (1 frase): "Fíjate en...", "Antes de seguir, observa..."
 
-100-150 palabras. SOLO la narración, sin comillas, sin títulos. Tono vivo y personal.`
-      : `Generate an audio explanation about "${poiName}" in ${cityName}.
+200-280 palabras. Voz cálida, apasionada, español de España, tuteo. Estilo Lonely Planet / Civitatis. SOLO la narración, sin comillas, sin títulos, sin viñetas.`
+      : `Generate an audio explanation about "${poiName}"${cityName ? ` in ${cityName}` : ''}.
 
-${description ? `Background info: ${description.slice(0, 400)}` : ''}
+${description ? `Verified background info (extract dates, names, events):\n${description.slice(0, 1200)}` : ''}
 
-STRUCTURE:
-0. Start by asking the visitor to look at the image on screen: "Look at the image showing — do you see [brief visual description]? That's ${poiName}." (1-2 sentences)
-1. One surprising, concrete historical or cultural fact (not generic)
-2. What to look at specifically: where to look, which detail not to miss
-3. A practical insider tip: best time to visit, ticket info, local secret
-4. Close by inviting them to explore
+REQUIRED STRUCTURE (six short blocks):
+0. VISUAL CONFIRMATION (1-2 sentences): "Look at the image on screen — do you see [brief recognisable visual description]? That's ${poiName}."
+1. IMMEDIATE HOOK (1 sentence): surprising question, vivid image or striking fact.
+2. STORY WITH FACTS (2-3 sentences): 2-3 concrete facts from the background info — dates, protagonists, real events. NOT generic.
+3. ANECDOTE OR CURIOSITY (1-2 sentences): legend, architectural detail, human story — the thing travellers remember at home.
+4. INSIDER TIP (1 sentence): verifiable practical tip (best time, entry, secret). If nothing reliable, skip this block — do NOT invent.
+5. INVITING CLOSE (1 sentence): "Look at...", "Before moving on, notice..."
 
-100-150 words. ONLY the narration, no quotes, no titles. Lively and personal tone.`
+200-280 words. Warm, passionate voice. Lonely Planet / Civitatis style. ONLY the narration, no quotes, no titles, no bullets.`
 
   try {
-    return await callAI(system, user, getAIKey(userKey), 500)
+    return await callAI(system, user, getAIKey(userKey), 900)
   } catch (err) {
     console.error('AI POI explanation error:', err)
     return null

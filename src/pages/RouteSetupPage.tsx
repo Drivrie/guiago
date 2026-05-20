@@ -10,7 +10,7 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, fitRouteToTimeBudget } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, fitRouteToTimeBudget, pruneOutlierPOIs } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 
 type TravelMode = 'walk' | 'transit'
@@ -278,13 +278,19 @@ export function RouteSetupPage() {
         return
       }
 
-      // Order POIs for optimal walking path (nearest-neighbor from city centre)
+      // Order POIs for an optimal walking path: nearest-neighbor + 2-opt
+      // improvement (removes path crossings / zigzags that make routes feel
+      // un-realistic for a professional walking tour).
       pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
 
       // Trim the ordered list to what actually fits in the time budget.
       // Walking mode only — transit users accept longer travel times.
       if (travelMode === 'walk') {
         pois = fitRouteToTimeBudget(pois, selectedDuration)
+        // Drop any "lonely" outlier whose nearest neighbours are both far
+        // away (>1.5 km) — a real walking-tour route never has a single
+        // POI sitting in the middle of a long detour.
+        pois = pruneOutlierPOIs(pois, 1500)
       }
 
       setPOIs(pois)
