@@ -2,10 +2,21 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
 import { useAppStore } from '../stores/appStore'
-import { getCityCoords } from '../data/cityData'
+import { getNearbyCities, getFlagEmoji, getCityDetails } from '../services/nominatim'
 import { hasAIKey } from '../services/ai'
 import type { City } from '../types'
 
+// Always-visible fallback: diverse international mix shown immediately on load
+const FALLBACK_CITIES: Array<City & { emoji: string; tag: { es: string; en: string } }> = [
+  { id: 'roma', name: 'Roma', displayName: 'Roma, Italia', country: 'Italia', countryCode: 'IT', lat: 41.9028, lon: 12.4964, wikipediaTitle: 'Roma', emoji: '🏛️', tag: { es: 'Ciudad eterna', en: 'Eternal city' } },
+  { id: 'paris', name: 'París', displayName: 'París, Francia', country: 'Francia', countryCode: 'FR', lat: 48.8566, lon: 2.3522, wikipediaTitle: 'París', emoji: '🗼', tag: { es: 'Ciudad de la luz', en: 'City of light' } },
+  { id: 'lisboa', name: 'Lisboa', displayName: 'Lisboa, Portugal', country: 'Portugal', countryCode: 'PT', lat: 38.7223, lon: -9.1393, wikipediaTitle: 'Lisboa', emoji: '🌊', tag: { es: 'Siete colinas', en: 'Seven hills' } },
+  { id: 'amsterdam', name: 'Ámsterdam', displayName: 'Ámsterdam, Países Bajos', country: 'Países Bajos', countryCode: 'NL', lat: 52.3676, lon: 4.9041, wikipediaTitle: 'Ámsterdam', emoji: '🚲', tag: { es: 'Canales y arte', en: 'Canals & art' } },
+  { id: 'berlin', name: 'Berlín', displayName: 'Berlín, Alemania', country: 'Alemania', countryCode: 'DE', lat: 52.5200, lon: 13.4050, wikipediaTitle: 'Berlín', emoji: '🎭', tag: { es: 'Historia y cultura', en: 'History & culture' } },
+  { id: 'praga', name: 'Praga', displayName: 'Praga, República Checa', country: 'República Checa', countryCode: 'CZ', lat: 50.0755, lon: 14.4378, wikipediaTitle: 'Praga', emoji: '🏰', tag: { es: 'Ciudad de oro', en: 'Golden city' } },
+  { id: 'madrid', name: 'Madrid', displayName: 'Madrid, España', country: 'España', countryCode: 'ES', lat: 40.4168, lon: -3.7038, wikipediaTitle: 'Madrid', emoji: '🎯', tag: { es: 'Capital vibrante', en: 'Vibrant capital' } },
+  { id: 'barcelona', name: 'Barcelona', displayName: 'Barcelona, España', country: 'España', countryCode: 'ES', lat: 41.3851, lon: 2.1734, wikipediaTitle: 'Barcelona', emoji: '🎨', tag: { es: 'Gaudí y mar', en: 'Gaudí & sea' } },
+]
 
 export function HomePage() {
   const { language, setLanguage, recentCities, setCity, anthropicApiKey } = useAppStore()
@@ -24,19 +35,89 @@ export function HomePage() {
     }
   }, [setOffline])
 
+  // nearbyCities: null = not fetched yet, [] = no results, [...] = results ready
+  const [nearbyCities, setNearbyCities] = useState<(City & { distanceKm?: number })[] | null>(null)
+  const [searchingLocation, setSearchingLocation] = useState(false)
+  const [locationGranted, setLocationGranted] = useState(false)
+  const [userCoords, setUserCoords] = useState<[number, number] | null>(null)
+
+  // Effect 1: use location only if permission was ALREADY granted — never prompt here.
+  // Location prompts belong exclusively to TodayPage (the "What to visit today?" flow).
+  useEffect(() => {
+    if (!navigator.geolocation) return
+
+    const getPositionSilently = () => {
+      setSearchingLocation(true)
+      const safetyTimer = setTimeout(() => setSearchingLocation(false), 9000)
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          clearTimeout(safetyTimer)
+          setUserCoords([pos.coords.latitude, pos.coords.longitude])
+          setLocationGranted(true)
+          setSearchingLocation(false)
+        },
+        () => {
+          clearTimeout(safetyTimer)
+          setSearchingLocation(false)
+        },
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+      )
+      return () => clearTimeout(safetyTimer)
+    }
+
+    if ('permissions' in navigator) {
+      // Check without prompting; only proceed if already granted
+      navigator.permissions
+        .query({ name: 'geolocation' as PermissionName })
+        .then(status => {
+          if (status.state === 'granted') getPositionSilently()
+          // 'prompt' or 'denied' → just show fallback cities, no request made
+        })
+        .catch(() => { /* Permissions API unavailable — skip location on homepage */ })
+    }
+    // If Permissions API is not available, skip location entirely on homepage
+  }, [])
+
+  // Effect 2: fetch nearby cities when coords arrive (re-fetches on language change too)
+  useEffect(() => {
+    if (!userCoords) return
+    const [lat, lon] = userCoords
+    getNearbyCities(lat, lon, language)
+      .then(cities => setNearbyCities(cities.length > 0 ? cities : []))
+      .catch(() => setNearbyCities([]))
+  }, [userCoords, language])
+
   function handleRecentCity(city: City) {
     setCity(city)
     navigate(`/city/${encodeURIComponent(city.name)}`)
   }
 
-  const featuredCities = [
-    { name: 'Toledo', emoji: '⚔️', tag: language === 'es' ? 'Historia medieval' : 'Medieval history' },
-    { name: 'Sevilla', emoji: '💃', tag: language === 'es' ? 'Arte y flamenco' : 'Art & flamenco' },
-    { name: 'Granada', emoji: '🏰', tag: language === 'es' ? 'La Alhambra' : 'The Alhambra' },
-    { name: 'Salamanca', emoji: '🎓', tag: language === 'es' ? 'Ciudad universitaria' : 'University city' },
-    { name: 'Cádiz', emoji: '🌊', tag: language === 'es' ? 'La más antigua' : 'Oldest city' },
-    { name: 'Córdoba', emoji: '🕌', tag: language === 'es' ? 'Mezquita-Catedral' : 'Mosque-Cathedral' },
-  ]
+  async function handleCityClick(city: City) {
+    let fullCity = city
+    if (!city.country && city.lat && city.lon) {
+      const details = await getCityDetails(city.lat, city.lon)
+      if (details) fullCity = { ...city, country: details.country, countryCode: details.countryCode }
+    }
+    setCity(fullCity)
+    navigate(`/city/${encodeURIComponent(fullCity.name)}`)
+  }
+
+  function getCityTag(city: City & { distanceKm?: number }): string {
+    if (city.distanceKm !== undefined) {
+      return city.distanceKm < 10
+        ? (language === 'es' ? 'Tu zona' : 'Your area')
+        : (language === 'es' ? `a ${city.distanceKm} km` : `${city.distanceKm} km away`)
+    }
+    return city.country || ''
+  }
+
+  // Always show something: nearby cities when ready, fallback otherwise
+  const hasNearby = nearbyCities !== null && nearbyCities.length > 0
+  const displayCities = hasNearby ? nearbyCities! : FALLBACK_CITIES
+
+  const sectionTitle = hasNearby
+    ? (language === 'es' ? 'Ciudades cercanas a ti' : 'Cities near you')
+    : (language === 'es' ? 'Destinos populares en el mundo' : 'Popular destinations worldwide')
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-orange-50 via-amber-50 to-white safe-top">
@@ -56,7 +137,6 @@ export function HomePage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Language toggle */}
             <button
               onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}
               className="flex items-center gap-1.5 bg-white rounded-xl px-3 py-2 shadow-sm border border-stone-100 active:scale-95 transition-transform"
@@ -64,7 +144,6 @@ export function HomePage() {
               <span className="text-base">{language === 'es' ? '🇪🇸' : '🇬🇧'}</span>
               <span className="text-sm font-semibold text-stone-600">{language === 'es' ? 'ES' : 'EN'}</span>
             </button>
-            {/* Settings */}
             <button
               onClick={() => navigate('/settings')}
               className="w-9 h-9 bg-white rounded-xl shadow-sm border border-stone-100 flex items-center justify-center active:scale-95 transition-transform"
@@ -90,9 +169,7 @@ export function HomePage() {
               {language === 'es' ? '¿Qué visitar hoy?' : 'What to visit today?'}
             </p>
             <p className="text-blue-200 text-xs mt-0.5">
-              {language === 'es'
-                ? 'Rutas basadas en tu ubicación actual'
-                : 'Routes based on your current location'}
+              {language === 'es' ? 'Rutas basadas en tu ubicación actual' : 'Routes based on your current location'}
             </p>
           </div>
           <svg className="w-5 h-5 text-blue-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -134,37 +211,46 @@ export function HomePage() {
           </div>
         )}
 
-        {/* Featured cities */}
+        {/* City recommendations — ALWAYS visible from the very first render */}
         <div className="mb-6">
-          <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider mb-3">
-            {language === 'es' ? 'Destinos populares en España' : 'Popular destinations in Spain'}
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider">
+              {sectionTitle}
+            </h3>
+            {/* Subtle indicator while waiting for GPS / Overpass */}
+            {(searchingLocation || (locationGranted && nearbyCities === null)) && (
+              <span className="flex items-center gap-1.5 text-xs text-blue-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block" />
+                {language === 'es' ? 'Buscando cercanas…' : 'Finding nearby…'}
+              </span>
+            )}
+            {hasNearby && (
+              <span className="text-xs text-blue-500 font-medium flex items-center gap-1">
+                <span>📍</span>
+                {language === 'es' ? 'Según tu ubicación' : 'Based on your location'}
+              </span>
+            )}
+          </div>
+
+          {/* City grid — always rendered, never hidden */}
           <div className="grid grid-cols-2 gap-3">
-            {featuredCities.map(city => (
-              <button
-                key={city.name}
-                onClick={() => {
-                  const coords = getCityCoords(city.name) || { lat: 0, lon: 0 }
-                  const c: City = {
-                    id: city.name.toLowerCase(),
-                    name: city.name,
-                    displayName: `${city.name}, España`,
-                    country: 'España',
-                    countryCode: 'ES',
-                    lat: coords.lat,
-                    lon: coords.lon,
-                    wikipediaTitle: city.name,
-                  }
-                  setCity(c)
-                  navigate(`/city/${encodeURIComponent(city.name)}`)
-                }}
-                className="bg-white rounded-2xl p-4 shadow-sm border border-stone-50 text-left active:scale-[0.97] transition-transform hover:shadow-md"
-              >
-                <span className="text-3xl">{city.emoji}</span>
-                <p className="font-bold text-stone-800 mt-2">{city.name}</p>
-                <p className="text-xs text-stone-400 mt-0.5">{city.tag}</p>
-              </button>
-            ))}
+            {(displayCities as Array<City & { distanceKm?: number; emoji?: string; tag?: { es: string; en: string } }>).map(city => {
+              const emoji = city.emoji || (city.countryCode ? getFlagEmoji(city.countryCode) : '🏙️')
+              const tag = city.tag
+                ? (language === 'es' ? city.tag.es : city.tag.en)
+                : getCityTag(city)
+              return (
+                <button
+                  key={city.id}
+                  onClick={() => handleCityClick(city)}
+                  className="bg-white rounded-2xl p-4 shadow-sm border border-stone-50 text-left active:scale-[0.97] transition-transform hover:shadow-md"
+                >
+                  <span className="text-3xl">{emoji}</span>
+                  <p className="font-bold text-stone-800 mt-2 truncate">{city.name}</p>
+                  <p className="text-xs text-stone-400 mt-0.5 truncate">{tag}</p>
+                </button>
+              )
+            })}
           </div>
         </div>
 

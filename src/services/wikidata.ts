@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Wikidata helper — fame signal for POIs.
+// Wikidata helper — fame signal for POIs
 //
 // Each Wikipedia article maps to a Wikidata entity (a QID). The number of
 // language editions that link to the entity (`sitelinks`) is the best

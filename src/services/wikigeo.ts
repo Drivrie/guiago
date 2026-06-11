@@ -64,13 +64,6 @@ const ROUTE_KEYWORDS: Record<RouteType, RegExp> = {
   naturaleza: /parque|jardín|río|arroyo|sierra|monte|playa|laguna|reserva|bosque|dehesa|marisma|huerta|alameda|cascada|lago|estanque|park|garden|river|stream|mountain|beach|lagoon|reserve|forest|woodland|marsh|waterfall|lake|pond|greenway|botanical/i,
 }
 
-// For imprescindibles, also use the combined score across ALL types
-const ALL_KEYWORDS_COMBINED = Object.entries(ROUTE_KEYWORDS)
-  .filter(([k]) => k !== 'imprescindibles')
-  .map(([, v]) => v.source)
-  .join('|')
-const ALL_KEYWORDS_RE = new RegExp(ALL_KEYWORDS_COMBINED, 'gi')
-
 // Off-theme categories per route type — articles that obviously belong to a
 // DIFFERENT route theme should be rejected outright (otherwise a famous
 // cathedral surfaces as a "gastronomic" result just because Wikipedia has a
@@ -84,11 +77,18 @@ const OFF_THEME_KEYWORDS: Record<RouteType, RegExp> = {
   monumental: /(?!)/,
   arquitectura: /(?!)/,
   gastronomia: /\b(catedral|cathedral|basílica|basilica|sinagoga|synagogue|mezquita|mosque|convento|convent|monasterio|monastery|cementerio|cemetery|necrópolis|necropolis|batalla|battle|guerra militar)\b/i,
-  historia_negra: /\b(jardín|jardin|garden|parque urbano|public park|fuente decorativa|decorative fountain|mercado|food market|wine festival|sidrería|cider house|panadería|bakery|restaurante|restaurant|cafetería|cafe)\b/i,
+  historia_negra: /\b(jardín botánico|botanical garden|parque urbano|public park|fuente decorativa|decorative fountain|mercado de abastos|food market|wine festival|sidrería|cider house|panadería|bakery|restaurante|restaurant|cafetería|cafe)\b/i,
   curiosidades: /\b(banco central|central bank|hospital general|general hospital|ayuntamiento sede|city hall headquarters|aeropuerto|airport)\b/i,
   secretos_locales: /(?!)/, // handled by fame inverse weighting instead
   naturaleza: /\b(catedral|cathedral|basílica|basilica|palacio|palace|castillo|castle|museo|museum|sinagoga|synagogue|mezquita|mosque|inquisición|inquisition|ejecución|execution)\b/i,
 }
+
+// For imprescindibles, also use the combined score across ALL types
+const ALL_KEYWORDS_COMBINED = Object.entries(ROUTE_KEYWORDS)
+  .filter(([k]) => k !== 'imprescindibles')
+  .map(([, v]) => v.source)
+  .join('|')
+const ALL_KEYWORDS_RE = new RegExp(ALL_KEYWORDS_COMBINED, 'gi')
 
 function cleanHtml(html: string): string {
   return html
@@ -99,29 +99,27 @@ function cleanHtml(html: string): string {
 }
 
 /**
- * Score a Wikipedia article for its relevance to the requested route type.
+ * Score a Wikipedia article for relevance to the requested route type.
  *
  * THE KEYWORD GATE: for any route type EXCEPT `imprescindibles`, an article
- * with zero on-theme keyword matches returns score 0 (rejected by the caller
- * via `_score > 0` filtering). This prevents famous-but-off-theme landmarks
- * (cathedrals, palaces) from drowning out genuine gastronomia / naturaleza /
- * historia_negra / curiosidades POIs just because they have long Wikipedia
- * articles.
+ * with zero on-theme keyword matches returns score 0 (and the caller drops
+ * it via `_score > 0` filtering). This prevents famous-but-off-theme
+ * landmarks (cathedrals, palaces) from drowning out genuine gastronomía,
+ * naturaleza, historia_negra, curiosidades POIs just because they have long
+ * Wikipedia articles. Length and heritage bonuses ONLY apply on top of a
+ * positive keyword match — they amplify on-theme hits, never lift off-theme
+ * ones.
  *
- * The article-length bonus and the UNESCO/heritage bonus ONLY apply when
- * keyword match > 0 — so they amplify a true on-theme hit but never carry
- * an off-theme article above an on-theme one.
- *
- * For `imprescindibles`, any landmark-keyword match (across all themes) is
- * accepted: it's the catch-all "best-of" type that should surface the city's
- * most iconic sites regardless of niche.
+ * For `imprescindibles`, any landmark-keyword match across all themes is
+ * accepted: it's the catch-all "best-of" type that should surface the
+ * city's most iconic sites regardless of niche.
  */
 function scoreArticle(title: string, extract: string, routeType: RouteType): number {
   const text = `${title} ${extract.slice(0, 600)}`
 
   // OFF-THEME REJECTION — articles whose title/intro clearly belong to a
-  // different theme score 0 outright. This is the biggest single lever for
-  // route-type differentiation.
+  // different theme score 0 outright. Biggest single lever for route-type
+  // differentiation.
   const offThemeRe = OFF_THEME_KEYWORDS[routeType]
   if (offThemeRe.source !== '(?!)' && offThemeRe.test(text)) return 0
 
@@ -129,7 +127,7 @@ function scoreArticle(title: string, extract: string, routeType: RouteType): num
     const allMatches = (text.match(ALL_KEYWORDS_RE) || []).length
     if (allMatches === 0 && extract.length < 600) return 0
     const notorietyBonus = /turístico|famoso|emblemático|icónico|símbolo|principal|destacad|patrimonio|unesco|known for|famous|landmark|iconic|renowned|world-famous/i.test(text) ? 4 : 0
-    const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building|denkmalliste/i.test(text) ? 6 : 0
+    const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building|denkmalliste/i.test(extract) ? 6 : 0
     const lengthBonus = extract.length > 1500 ? 4 : extract.length > 800 ? 3 : extract.length > 400 ? 2 : 0
     return allMatches + notorietyBonus + heritageBonus + lengthBonus
   }
@@ -138,15 +136,14 @@ function scoreArticle(title: string, extract: string, routeType: RouteType): num
   const themeMatches = (text.match(re) || []).length
   if (themeMatches === 0) return 0   // THE GATE — drop everything off-theme
 
-  // Length and heritage bonuses only multiply an on-theme hit.
   const lengthBonus = extract.length > 1500 ? 3 : extract.length > 800 ? 2 : extract.length > 400 ? 1 : 0
   const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building/i.test(extract) ? 4 : 0
   return themeMatches * 2 + lengthBonus + heritageBonus
 }
 
-/** Per-route-type weight for the Wikidata sitelinks (international fame) signal.
- *  `secretos_locales` deliberately weights fame INVERSELY — local secrets are
- *  by definition not internationally famous. */
+/** Sitelinks weight per route type — how much international fame matters
+ *  for each kind of route. Iconic-landmark routes weight it heavily;
+ *  "local secrets" routes weight it inversely (we actually want LESS famous). */
 function fameWeight(routeType: RouteType): number {
   switch (routeType) {
     case 'imprescindibles': return 1.0
@@ -164,11 +161,11 @@ function fameWeight(routeType: RouteType): number {
 /** Realistic visit times for a walking-tour stop (not a deep interior visit). */
 function guessVisitMinutes(title: string, extract: string): number {
   const t = `${title} ${extract.slice(0, 200)}`.toLowerCase()
-  if (/museo|museum/.test(t)) return 25
-  if (/catedral|basílica|cathedral|basilica/.test(t)) return 18
-  if (/palacio|palace|alcázar|alhambra|alcazaba/.test(t)) return 20
-  if (/castillo|castle|fortaleza|muralla/.test(t)) return 18
-  if (/parque|jardín|park|garden/.test(t)) return 15
+  if (/museo|museum/.test(t)) return 20
+  if (/catedral|basílica|cathedral|basilica/.test(t)) return 15
+  if (/palacio|palace|alcázar|alhambra|alcazaba/.test(t)) return 18
+  if (/castillo|castle|fortaleza|muralla/.test(t)) return 15
+  if (/parque|jardín|park|garden/.test(t)) return 12
   if (/mercado|market/.test(t)) return 20
   if (/restaurante|restaurant|taberna|tavern|bar|café|cafe/.test(t)) return 45
   if (/plaza|square|piazza/.test(t)) return 10
@@ -252,7 +249,7 @@ async function geosearchSingleLang(
 
     // Batch fetch in chunks of 50 (MediaWiki pageids limit). We also request
     // `pageprops` (specifically `wikibase_item`, the Wikidata Q-id) so we can
-    // re-rank by international fame via sitelinks later.
+    // re-rank by international fame via sitelinks later — see fetchSitelinksCounts.
     type WikiPage = {
       title?: string
       extract?: string
@@ -269,7 +266,7 @@ async function geosearchSingleLang(
         prop: 'extracts|pageimages|pageprops',
         ppprop: 'wikibase_item',
         exintro: 'true',
-        exchars: '900',
+        exchars: '800',
         pithumbsize: '600',
         format: 'json',
         origin: '*',
@@ -290,10 +287,6 @@ async function geosearchSingleLang(
       if (!extract && !geoItem.title) continue
 
       const score = scoreArticle(geoItem.title, extract, routeType)
-      // Hard gate: if scoreArticle returned 0 we drop the candidate now —
-      // for narrative / niche types this is what filters out cathedrals
-      // from gastronomia routes, etc.
-      if (score <= 0) continue
       const qid = page?.pageprops?.wikibase_item
       scored.push({
         id: `wiki-${wikiLang}-${geoItem.pageid}`,
@@ -307,7 +300,7 @@ async function geosearchSingleLang(
         wikipediaTitle: geoItem.title,
         estimatedVisitMinutes: guessVisitMinutes(geoItem.title, extract),
         tags: { wikiLang, ...(qid ? { wikidata: qid } : {}) },
-        _score: score,
+        _score: score + (extract.length > 200 ? 1 : 0),
         _lang: wikiLang,
       })
     }
@@ -326,11 +319,16 @@ export async function searchPOIsWikipedia(
   routeType: RouteType,
   maxPOIs: number,
   lang: Language = 'es',
-  excludeNames: string[] = []
+  excludeNames: string[] = [],
+  radiusMeters: number = 4000
 ): Promise<POI[]> {
   try {
     const excludeLower = excludeNames.map(n => n.toLowerCase())
-    const radius = deriveSearchRadius(city)
+    // Union of both strategies: honour the caller's time-budget radius (main)
+    // but never search a smaller area than the bounding-box-derived minimum so
+    // small/local towns still return enough POIs (feature). Capped at 10km
+    // (Wikipedia geosearch max). The route builder trims to the time budget.
+    const radius = Math.min(10000, Math.max(radiusMeters, deriveSearchRadius(city)))
     const langs = wikiLangsForCity(city, lang)
 
     const perLang = await Promise.all(
@@ -364,7 +362,7 @@ export async function searchPOIsWikipedia(
     // candidates we batch-fetch the number of Wikipedia editions that link
     // to each entity (world-famous landmarks: 50-200+; minor local sites: 1-3),
     // and fold that into the score. The weight per route type lets routes like
-    // `secretos_locales` deliberately favour LESS famous sites.
+    // "secretos_locales" deliberately favour LESS famous sites.
     const TOP_FOR_FAME = Math.min(30, scored.length)
     const topQids = scored.slice(0, TOP_FOR_FAME)
       .map(p => p.tags?.wikidata)
@@ -377,14 +375,21 @@ export async function searchPOIsWikipedia(
         if (!qid) continue
         const links = sitelinks.get(qid) || 0
         if (links <= 0) continue
-        const bonus = Math.min(30, Math.round(links * weight * 0.45))
+        // sitelinks → fame bonus: scaled by route-type weight, capped to keep
+        // famous-but-thematically-wrong POIs from dominating. A weight of 1.0
+        // and 60 sitelinks → +24 bonus (large but bounded).
+        const bonus = Math.min(28, Math.round(links * weight * 0.45))
         p._score += bonus
       }
+      // Re-sort after fame fold-in
       scored.sort((a, b) => b._score - a._score)
     }
 
-    const relevant = scored.filter(p => p._score > 0)
-    const result = relevant.length >= 2 ? relevant : scored
+    // Always honour the theme gate — never silently surface off-theme
+    // (score 0) articles even when no on-theme article was found. An empty
+    // result triggers the theme-preserving fallback chain in RouteSetupPage,
+    // which is preferable to a "gastronomic route showing only cathedrals".
+    const result = scored.filter(p => p._score > 0)
 
     return result.slice(0, maxPOIs).map(({ _score: _, _lang: __, ...poi }) => poi)
   } catch (err) {
@@ -449,7 +454,7 @@ async function trySearchPOIInWiki(
       pageids: String(hit.pageid),
       prop: 'extracts|pageimages|coordinates',
       exintro: 'true',
-      exchars: '4000',
+      exchars: '800',
       pithumbsize: '600',
       colimit: '1',
       format: 'json',

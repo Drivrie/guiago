@@ -1,4 +1,4 @@
-import type { RouteResult, NavigationStep } from '../types'
+import type { RouteResult, NavigationStep, POI } from '../types'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1/foot'
 
@@ -313,6 +313,45 @@ export function estimateWalkingTime(distanceMeters: number): number {
   return Math.round(distanceMeters / 84)
 }
 
+/**
+ * Trims an already-ordered POI list so the total estimated time (walking + visits)
+ * fits within `budgetMinutes`. Call this AFTER `orderPOIsOptimally`.
+ *
+ * Walk speed: 84 m/min (~5 km/h).
+ * Visit times are capped at 18 min — even large museums get a quick exterior visit
+ * on a guided walking tour; deep interior visits are self-directed.
+ * Always returns at least 3 POIs (or all available if fewer).
+ */
+export function fitRouteToTimeBudget(orderedPOIs: POI[], budgetMinutes: number): POI[] {
+  if (orderedPOIs.length <= 3) return orderedPOIs
+
+  const WALK_SPEED = 84    // m/min
+  const MIN_VISIT  = 8     // min per stop
+  const MAX_VISIT  = 18    // cap for a walking-tour stop
+  const TRANSITION = 2     // photo + reading buffer per stop
+
+  let used = 0
+  const result: POI[] = []
+
+  for (const poi of orderedPOIs) {
+    const walkMin = result.length === 0 ? 0 : (() => {
+      const prev = result[result.length - 1]
+      return calculateDistance(prev.lat, prev.lon, poi.lat, poi.lon) / WALK_SPEED
+    })()
+
+    const visitMin = Math.max(MIN_VISIT, Math.min(MAX_VISIT, poi.estimatedVisitMinutes ?? 12))
+    const stopCost = walkMin + visitMin + TRANSITION
+
+    // Always include the first 3 stops; stop adding when budget is exhausted
+    if (result.length >= 3 && used + stopCost > budgetMinutes) break
+
+    result.push(poi)
+    used += stopCost
+  }
+
+  return result
+}
+
 export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
   pois: T[],
   startLat?: number,
@@ -323,6 +362,7 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
   const unvisited = [...pois]
   const ordered: T[] = []
 
+  // Start from the given start position, or from the first POI if none given.
   // Use an explicit undefined check: a valid start coordinate can legitimately
   // be 0 (equator / prime meridian), which `!startLat` would wrongly discard.
   const hasStart = startLat !== undefined && startLon !== undefined
@@ -355,16 +395,18 @@ export function orderPOIsOptimally<T extends { lat: number; lon: number }>(
   }
 
   // 2-opt improvement: greedy nearest-neighbour often produces routes with
-  // path crossings ("zigzags") that a local-search pass can eliminate. Same
-  // technique walking-tour planners use — same POI set, smoother order.
+  // path crossings ("zigzags") that a quick local-search pass can eliminate.
+  // This is the same technique used by walking-tour route planners — it
+  // visits the same set of POIs but in a smoother order, removing the
+  // un-realistic detours that made routes feel un-professional.
   return twoOptImprove(ordered, startLat, startLon)
 }
 
 /**
  * 2-opt local-search improvement over a POI sequence. Repeatedly tries
  * reversing each [i..j] sub-tour and keeps the change if it reduces total
- * walking distance (origin → POIs). Converges in O(n²) per pass; capped at
- * 50 passes (far more than needed for typical N ≤ 14).
+ * walking distance (origin → POIs → end). Converges in O(n²) per pass; we
+ * cap at 50 passes which is far more than needed for typical N ≤ 14.
  */
 function twoOptImprove<T extends { lat: number; lon: number }>(
   route: T[],
@@ -376,6 +418,7 @@ function twoOptImprove<T extends { lat: number; lon: number }>(
   const hasStart = startLat !== undefined && startLon !== undefined
   const start: { lat: number; lon: number } | null = hasStart ? { lat: startLat, lon: startLon } : null
 
+  // Local helper to fetch the predecessor coordinate at index i.
   const predecessorOf = (current: T[], i: number): { lat: number; lon: number } => {
     if (i === 0) return start ?? current[0]
     return current[i - 1]
@@ -393,11 +436,13 @@ function twoOptImprove<T extends { lat: number; lon: number }>(
         const b = best[i]
         const c = best[j]
         const d = j + 1 < best.length ? best[j + 1] : null
+        // Distance of the two edges we'd cut vs the two edges we'd create.
         const dBefore = calculateDistance(a.lat, a.lon, b.lat, b.lon) +
           (d ? calculateDistance(c.lat, c.lon, d.lat, d.lon) : 0)
         const dAfter = calculateDistance(a.lat, a.lon, c.lat, c.lon) +
           (d ? calculateDistance(b.lat, b.lon, d.lat, d.lon) : 0)
         if (dAfter + 1e-6 < dBefore) {
+          // Reverse the slice [i..j] in place
           const reversed = best.slice(i, j + 1).reverse()
           best = [...best.slice(0, i), ...reversed, ...best.slice(j + 1)]
           improved = true
@@ -420,7 +465,7 @@ export function pruneOutlierPOIs<T extends { lat: number; lon: number }>(
 ): T[] {
   if (ordered.length <= 3) return ordered
   const result = [...ordered]
-  let i = 1
+  let i = 1 // skip first
   while (i < result.length - 1) {
     const prev = result[i - 1]
     const next = result[i + 1]
@@ -429,43 +474,10 @@ export function pruneOutlierPOIs<T extends { lat: number; lon: number }>(
     const dNext = calculateDistance(here.lat, here.lon, next.lat, next.lon)
     if (dPrev > maxStepMeters && dNext > maxStepMeters) {
       result.splice(i, 1)
+      // Re-check this index against the new neighbours (do not increment)
     } else {
       i++
     }
-  }
-  return result
-}
-
-/**
- * Trims an already-ordered POI list so the total estimated time (walking +
- * visits) fits within `budgetMinutes`. Call AFTER `orderPOIsOptimally`.
- *
- * Walk speed: 84 m/min (~5 km/h). Visit times are capped at 25 min so even
- * a museum gets a quick exterior visit on a guided walking tour.
- * Always keeps at least 3 POIs (or all available if fewer).
- */
-export function fitRouteToTimeBudget<T extends { lat: number; lon: number; estimatedVisitMinutes?: number }>(
-  orderedPOIs: T[],
-  budgetMinutes: number
-): T[] {
-  if (orderedPOIs.length <= 3) return orderedPOIs
-  const WALK_SPEED = 84
-  const MIN_VISIT = 8
-  const MAX_VISIT = 25
-  const TRANSITION = 2
-
-  let used = 0
-  const result: T[] = []
-  for (const poi of orderedPOIs) {
-    const walkMin = result.length === 0 ? 0 : (() => {
-      const prev = result[result.length - 1]
-      return calculateDistance(prev.lat, prev.lon, poi.lat, poi.lon) / WALK_SPEED
-    })()
-    const visitMin = Math.max(MIN_VISIT, Math.min(MAX_VISIT, poi.estimatedVisitMinutes ?? 15))
-    const stopCost = walkMin + visitMin + TRANSITION
-    if (result.length >= 3 && used + stopCost > budgetMinutes) break
-    result.push(poi)
-    used += stopCost
   }
   return result
 }

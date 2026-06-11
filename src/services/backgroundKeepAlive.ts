@@ -131,3 +131,19 @@ export async function stopKeepAlive(): Promise<void> {
 
 /** True if keep-alive is currently active. */
 export function isKeepAliveActive(): boolean { return active }
+
+/**
+ * Publishes lock-screen / notification metadata via the MediaSession API so the
+ * user sees what GuiAgo is doing (e.g. "Walking to the Cathedral") while the
+ * screen is off, instead of just an anonymous "playing" indicator.
+ */
+export function setKeepAliveMetadata(title: string, subtitle: string): void {
+  if (!('mediaSession' in navigator)) return
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title,
+      artist: subtitle,
+      album: 'GuiAgo',
+    })
+  } catch { /* MediaMetadata unsupported — non-fatal */ }
+}

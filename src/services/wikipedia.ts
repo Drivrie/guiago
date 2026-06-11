@@ -150,7 +150,7 @@ async function fetchPOIFromMediaWiki(
     // 3. Fetch full article for first result
     const fullParams = new URLSearchParams({
       action: 'query', pageids: String(results[0].pageid),
-      prop: 'extracts|pageimages', exintro: 'true', exchars: '1500',
+      prop: 'extracts|pageimages', exintro: 'true', exchars: '6000',
       pithumbsize: '600', format: 'json', origin: '*'
     })
     const fullResp = await fetch(`${apiBase}?${fullParams}`)
@@ -175,7 +175,8 @@ export async function getPOIDescription(name: string, lang: Language = 'es'): Pr
   try {
     // Merge Wikipedia + Wikivoyage so the narration prompt receives BOTH
     // encyclopedic context (history, dates, names) and travel-guide flavour
-    // (what to see, when to go, anecdotes) — Civitatis-quality input.
+    // (what to see, when to go, anecdotes). This is what unlocks Civitatis-
+    // quality narrations: the AI no longer has to invent the travel-tip half.
     const [wikiRes, voyageRes] = await Promise.allSettled([
       fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
       fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
@@ -285,15 +286,17 @@ export async function getPOIInfoMultiSource(
  * Heuristic: does the article actually belong to the requested city?
  *
  * Requires the city name to appear as a discrete WORD in title or extract
- * (not just as a substring). Country alone is NO LONGER enough — a famous
- * "Catedral" article that mentions "Spain" would otherwise pass even when
- * it's Sevilla's cathedral and the user is in Burgos.
+ * (not just as a substring). The previous version accepted a country mention
+ * as sufficient — but a famous "Catedral" article that mentions "Spain"
+ * would then pass even if it's in Sevilla while the user is in Burgos.
+ * Country alone is no longer enough.
  */
 function articleMatchesCity(article: WikiResult, context?: POILookupContext): boolean {
   if (!context?.cityName) return true
   const haystack = `${article.title} ${article.extract}`.toLowerCase()
   const city = context.cityName.toLowerCase().trim()
   if (!city) return true
+  // Word-boundary match, with city name regex-escaped
   const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const cityWord = new RegExp(`(^|[^\\p{L}])${escaped}([^\\p{L}]|$)`, 'iu')
   return cityWord.test(haystack)
@@ -308,7 +311,6 @@ function titleSimilarity(query: string, title: string): number {
   if (t === q) return 1
   if (t.includes(q)) return 0.9
   if (q.includes(t)) return 0.7
-  // Word-overlap fraction (loose)
   const qWords = new Set(q.split(/\s+/).filter(w => w.length > 2))
   const tWords = new Set(t.split(/\s+/).filter(w => w.length > 2))
   if (qWords.size === 0) return 0
@@ -346,7 +348,7 @@ async function searchPOIByGeo(
     const detailParams = new URLSearchParams({
       action: 'query', pageids: pageIds,
       prop: 'extracts|pageimages|coordinates',
-      exintro: 'true', exchars: '1500',
+      exintro: 'true', exchars: '6000',
       pithumbsize: '600', colimit: '1',
       format: 'json', origin: '*'
     })
@@ -378,9 +380,7 @@ async function searchPOIByGeo(
       const distM = haversineMeters(lat, lon, coords.lat, coords.lon)
       if (distM > radiusMeters) continue
       const sim = titleSimilarity(name, page.title || '')
-      // Combined score: title similarity is the dominant signal (0..1 × 100),
-      // proximity adds a smaller secondary signal (inverse distance, capped).
-      const proximity = Math.max(0, 1 - distM / radiusMeters) // 0..1
+      const proximity = Math.max(0, 1 - distM / radiusMeters)
       const combined = sim * 100 + proximity * 20
       candidates.push({ combined, page })
     }
@@ -493,10 +493,10 @@ export function generateAudioScript(
     .map(s => s.trim())
     .filter(s => s.length > 30)
 
-  // Richer narration when AI is unavailable: 6 main sentences + 3 extras
+  // Richer narration when AI is unavailable: 5 main sentences + 3 extras
   // (was 3+2) so the template script feels closer to a real audio guide.
-  const mainContent = sentences.slice(0, 6).join(' ')
-  const extraContent = sentences.slice(6, 9).join(' ')
+  const mainContent = sentences.slice(0, 5).join(' ')
+  const extraContent = sentences.slice(5, 8).join(' ')
   const tip = poi.insiderTip?.trim()
 
   if (lang === 'en') {

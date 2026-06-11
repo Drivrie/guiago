@@ -25,9 +25,12 @@ function deriveOverpassRadius(city: City): number {
   return 5000
 }
 
-// Overpass tag queries per route type
-function buildOverpassQuery(city: City, routeType: RouteType): string {
-  const radius = deriveOverpassRadius(city)
+// Overpass tag queries per route type.
+// `radiusMeters` lets the caller cap the search to a realistic travel distance
+// (time-budget aware). When omitted, the radius is derived from the city's
+// bounding box so small/local towns still get a useful search area.
+function buildOverpassQuery(city: City, routeType: RouteType, radiusMeters?: number): string {
+  const radius = radiusMeters ?? deriveOverpassRadius(city)
   const lat = city.lat
   const lon = city.lon
 
@@ -230,8 +233,8 @@ function estimateVisitTime(routeType: RouteType, category: string): number {
 // elements regardless of route type. This is what unlocks POIs in less-known cities,
 // since locally-relevant landmarks are almost always tagged with wikidata or wikipedia
 // in OSM even when no English/Spanish Wikipedia article exists.
-function buildBroadHeritageQuery(city: City): string {
-  const radius = deriveOverpassRadius(city)
+function buildBroadHeritageQuery(city: City, radiusMeters?: number): string {
+  const radius = radiusMeters ?? deriveOverpassRadius(city)
   const lat = city.lat
   const lon = city.lon
   return `[out:json][timeout:30];
@@ -250,9 +253,9 @@ function buildBroadHeritageQuery(city: City): string {
 out center;`
 }
 
-export async function getPOIsByCity(city: City, routeType: RouteType, maxDuration: number = 180): Promise<POI[]> {
+export async function getPOIsByCity(city: City, routeType: RouteType, maxDuration: number = 180, radiusMeters?: number): Promise<POI[]> {
   try {
-    const query = buildOverpassQuery(city, routeType)
+    const query = buildOverpassQuery(city, routeType, radiusMeters)
 
     const response = await fetch(OVERPASS_BASE, {
       method: 'POST',
@@ -267,7 +270,7 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
     }
 
     const data = await response.json()
-    let elements: OverpassElement[] = data.elements || []
+    const elements: OverpassElement[] = data.elements || []
 
     // For less-known cities the type-specific query may return very few results.
     // Issue a parallel broad heritage query and merge unique elements so that locally-
@@ -277,7 +280,7 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
         const broadResp = await fetch(OVERPASS_BASE, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `data=${encodeURIComponent(buildBroadHeritageQuery(city))}`,
+          body: `data=${encodeURIComponent(buildBroadHeritageQuery(city, radiusMeters))}`,
         })
         if (broadResp.ok) {
           const broadData = await broadResp.json()

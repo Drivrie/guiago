@@ -115,8 +115,8 @@ function routeTypeGuidance(routeType: RouteType, lang: Language): string {
         : `GOAL: buildings selected for their ARCHITECTURAL VALUE. Each stop must illustrate a DIFFERENT STYLE or ERA — Gothic, Mudéjar, Renaissance, Baroque, Neoclassical, Modernism, Rationalism, Contemporary. In the \`reason\` field, NAME the style and the architect when known. FORBIDDEN: places picked for generic tourist fame if they don't add clear architectural value.`
     case 'gastronomia':
       return es
-        ? `OBJETIVO: SOLO lugares relacionados con comida y bebida — mercados históricos de abastos, bares de tapas centenarios, tabernas tradicionales, bodegas con visita, chocolaterías y pastelerías legendarias, asadores, sidrerías, cervecerías, neveras de vinos, calles gastronómicas. Incluye 1-2 platos/bebidas concretos a probar en cada sitio y un rango de precio aproximado en el insiderTip. PROHIBIDO ABSOLUTAMENTE: catedrales, palacios, museos, iglesias, castillos, monumentos. Si solo conoces los grandes monumentos de esa ciudad, devuelve menos paradas — NUNCA rellenes con sitios no gastronómicos.`
-        : `GOAL: ONLY food-and-drink places — historic food markets, century-old tapas bars, traditional taverns, wineries open to visit, legendary chocolatiers and patisseries, grill restaurants, cider houses, breweries, wine cellars, foodie streets. Include 1-2 specific dishes/drinks to try at each spot, and a rough price range in insiderTip. ABSOLUTELY FORBIDDEN: cathedrals, palaces, museums, churches, castles, monuments. If you only know the city's big monuments, return FEWER stops — NEVER pad with non-gastronomic sites.`
+        ? `OBJETIVO: SOLO lugares relacionados con comida y bebida — mercados históricos de abastos, bares de tapas centenarios, tabernas tradicionales, bodegas con visita, chocolaterías y pastelerías legendarias, asadores, sidrerías, cervecerías, calles gastronómicas. Incluye 1-2 platos/bebidas concretos a probar en cada sitio y un rango de precio aproximado en el insiderTip. PROHIBIDO ABSOLUTAMENTE: catedrales, palacios, museos, iglesias, castillos, monumentos. Si solo conoces los grandes monumentos de esa ciudad, devuelve menos paradas — NUNCA rellenes con sitios no gastronómicos.`
+        : `GOAL: ONLY food-and-drink places — historic food markets, century-old tapas bars, traditional taverns, wineries open to visit, legendary chocolatiers and patisseries, grill restaurants, cider houses, breweries, foodie streets. Include 1-2 specific dishes/drinks to try at each spot, and a rough price range in insiderTip. ABSOLUTELY FORBIDDEN: cathedrals, palaces, museums, churches, castles, monuments. If you only know the city's big monuments, return FEWER stops — NEVER pad with non-gastronomic sites.`
     case 'historia_negra':
       return es
         ? `OBJETIVO: SOLO lugares con historia oscura, trágica o macabra verificable — sitios de ejecuciones públicas, antiguas cárceles e Inquisición, hospitales de la peste, fosas comunes, cementerios con historia, escenarios de crímenes famosos, antiguas judérias tras pogromos, búnkeres y refugios de guerra, memoriales de víctimas, casas embrujadas con leyenda documentada. En el campo \`reason\` NOMBRA víctimas, fechas y eventos concretos. Tono respetuoso pero sin eufemismos. PROHIBIDO: monumentos famosos sin asociación histórica oscura clara, jardines bonitos, mercados de comida, restaurantes turísticos.`
@@ -283,8 +283,9 @@ export async function generateAIRoute(
   userKey: string,
   excludeNames: string[] = []
 ): Promise<AIRouteResult | null> {
-  // More POIs: 1 per 15 min, min 5, max 15
-  const maxPOIs = Math.max(5, Math.min(15, Math.floor(durationMinutes / 15)))
+  // Target: ~1 POI per 12 min of visit time, min 6, max 14
+  // 60 min → 5, 120 min → 10, 180 min → 13, 240 min → 14
+  const maxPOIs = Math.max(6, Math.min(14, Math.round(durationMinutes / 12)))
   const typeDesc = ROUTE_TYPE_DESC[routeType][lang]
   // Always use "CityName, Country" to avoid ambiguity (e.g. Roma Poland vs Roma Italy)
   const locationDesc = countryName ? `${cityName}, ${countryName}` : cityName
@@ -295,76 +296,74 @@ export async function generateAIRoute(
         : `\nIMPORTANT: The user already visited these places — exclude them completely: ${excludeNames.slice(0, 15).join(', ')}.`
       : ''
 
-  const guidance = routeTypeGuidance(routeType, lang)
-
   const system =
     lang === 'es'
-      ? `Eres un guía turístico profesional de élite, al nivel de los autores de Lonely Planet y National Geographic Traveler y de los guías presenciales de Civitatis y Walkative. Diseñas rutas MEMORABLES, COHERENTES y NARRATIVAS con paradas próximas entre sí (máximo 600-800m) para que fluyan a pie. Conoces a fondo cada ciudad — su historia, su gastronomía, sus barrios, sus historias oscuras. Respondes SOLO con JSON válido, sin texto adicional, sin markdown.`
-      : `You are an elite professional tour guide, on par with Lonely Planet and National Geographic Traveler authors and the in-person Civitatis and Walkative guides. You design MEMORABLE, COHERENT and NARRATIVE routes with stops close together (max 600-800m) so they flow on foot. You know each city deeply — its history, its food, its neighbourhoods, its dark stories. You respond ONLY with valid JSON, no additional text, no markdown.`
+      ? `Eres un guía turístico profesional de élite, al nivel de los autores de Lonely Planet, National Geographic Traveler y los guías presenciales de Civitatis y Walkative. Conoces en profundidad la historia, cultura, arquitectura y anécdotas de cada ciudad del mundo. Diseñas rutas memorables, coherentes y narrativas, con paradas próximas entre sí (máximo 600-800m) para que sea fluida y disfrutable a pie. Siempre respondes EXCLUSIVAMENTE con JSON válido — sin texto adicional, sin markdown, sin comentarios.`
+      : `You are an elite professional tour guide, on par with Lonely Planet and National Geographic Traveler authors and the in-person guides at Civitatis and Walkative. You deeply know the history, culture, architecture and anecdotes of every city in the world. You design memorable, coherent and narrative tours with stops close together (max 600-800m) so they flow smoothly on foot. You always respond EXCLUSIVELY with valid JSON — no additional text, no markdown, no comments.`
 
   const user =
     lang === 'es'
-      ? `Diseña una ruta turística de NIVEL LONELY PLANET para ${locationDesc}:
-- Tipo de ruta: ${typeDesc}
+      ? `Diseña una ruta turística de NIVEL LONELY PLANET / NATIONAL GEOGRAPHIC para ${locationDesc}:
+- Temática: ${typeDesc}
 - Duración total de visita: ${durationMinutes} minutos (sin contar desplazamientos)
 - Número de paradas: ${maxPOIs}${excludeClause}
 
 REGLA Nº 1 — DIFERENCIACIÓN ESTRICTA POR TIPO DE RUTA:
-${guidance}
+${routeTypeGuidance(routeType, lang)}
 
 REQUISITOS ESTRICTOS:
 1. TODOS los lugares deben estar FÍSICAMENTE en ${locationDesc} — no en otras ciudades, regiones ni países. Si dudas, NO lo incluyas.
-2. Usa los nombres OFICIALES como aparecen en Wikipedia (idioma local del país o inglés reconocible).
-3. Distancia máxima entre paradas consecutivas: 600-800 metros a pie. Si dos POIs están más lejos, sustituye uno por algo más cercano.
-4. Orden geográfico óptimo — ruta circular o lineal lógica, SIN cruces ni zigzags.
-5. Coherencia temática absoluta — cada parada DEBE encajar en el tipo de ruta. Si no encuentras suficientes paradas válidas del tipo solicitado, devuelve MENOS — NUNCA rellenes con sitios off-theme.
+2. Usa los nombres OFICIALES exactamente como aparecen en Wikipedia (idioma local del país o inglés reconocible). Ejemplos: "Wawel Royal Castle" no "Castillo Wawel"; "Catedral de Burgos" no "Cathedral of Burgos".
+3. Distancia máxima entre paradas consecutivas: 600-800 metros a pie. Si dos POIs están más lejos, sustituye uno por algo más cercano que mantenga la coherencia.
+4. Orden geográfico óptimo — ruta circular o lineal lógica, SIN cruces ni zigzags. La parada nº 1 cerca de un acceso natural (estación, plaza principal) y la última cerca de un buen sitio para acabar.
+5. Coherencia temática ABSOLUTA — cada parada DEBE encajar en el tipo de ruta. Si no hay suficientes paradas válidas del tipo solicitado, devuelve MENOS — NUNCA rellenes con sitios off-theme.
 6. Información histórica ESPECÍFICA y verificable: fechas concretas, nombres de protagonistas, eventos reales. Nada de descripciones genéricas.
-7. Insider tips REALES: si no conoces algo verificable, devuelve null — NO inventes.
+7. Insider tips REALES: hora óptima, taquilla, qué pedir, dónde sentarse, qué evitar. Si no conoces algo verificable para ese sitio, devuelve null — NO inventes.
 
 JSON exacto (sin texto fuera del JSON):
 {
-  "routeStory": "Narrativa de apertura evocadora en 2-3 frases adaptada al tipo de ruta (gastronómica, oscura, secreta, etc.) — atmósfera, hilo conductor, por qué merece la pena hoy. Estilo Lonely Planet — literario pero directo, apasionado.",
+  "routeStory": "Narrativa de apertura evocadora en 2-3 frases: atmósfera, hilo conductor, por qué esta ruta merece la pena hoy. Estilo Lonely Planet — literario pero directo, apasionado, que invite a salir ya.",
   "suggestedPOIs": [
     {
-      "name": "Nombre oficial completo en ${locationDesc} como aparece en Wikipedia",
-      "category": "categoría precisa adaptada al tipo (mercado/taberna/cementerio/jardín/etc)",
-      "reason": "Por qué este lugar concreto en esta posición de la ruta: 1-2 datos específicos y memorables ADAPTADOS al tipo de ruta",
-      "insiderTip": "Consejo verificable concreto. null si no estás seguro."
+      "name": "Nombre oficial completo en ${locationDesc} tal como aparece en Wikipedia (idioma local o inglés)",
+      "category": "categoría precisa (catedral/museo/plaza/palacio/jardín/mercado/barrio/iglesia/etc)",
+      "reason": "Por qué este lugar concreto en esta posición de la ruta: 1-2 datos históricos o culturales específicos y memorables",
+      "insiderTip": "Consejo práctico verificable: mejor hora, entrada gratuita, detalle que pocos notan, qué pedir, mejor punto fotográfico. null si no hay nada relevante o no estás seguro."
     }
   ]
 }`
-      : `Design a LONELY PLANET-level tour for ${locationDesc}:
-- Route type: ${typeDesc}
+      : `Design a LONELY PLANET / NATIONAL GEOGRAPHIC level tour for ${locationDesc}:
+- Theme: ${typeDesc}
 - Total visit duration: ${durationMinutes} minutes (excluding walking)
 - Number of stops: ${maxPOIs}${excludeClause}
 
 RULE Nº 1 — STRICT DIFFERENTIATION BY ROUTE TYPE:
-${guidance}
+${routeTypeGuidance(routeType, lang)}
 
 STRICT REQUIREMENTS:
-1. ALL places must be PHYSICALLY in ${locationDesc} — no other cities, regions or countries. If unsure, leave it out.
-2. Use OFFICIAL names as they appear on Wikipedia (local language or recognisable English).
-3. Maximum distance between consecutive stops: 600-800 metres on foot. If two POIs are further, swap one for something closer.
-4. Optimal geographic order — circular or linear logical route, NO crossings or zigzags.
-5. Absolute thematic coherence — each stop MUST fit the route type. If you can't find enough valid stops of the requested type, return FEWER — NEVER pad with off-theme places.
+1. ALL places must be PHYSICALLY in ${locationDesc} — not in other cities, regions or countries. If unsure, leave it out.
+2. Use OFFICIAL names exactly as they appear on Wikipedia (local language or widely recognised English). Examples: "Wawel Royal Castle" not "Castillo Wawel"; "Burgos Cathedral" not "Catedral de Burgos".
+3. Maximum distance between consecutive stops: 600-800 metres on foot. If two POIs are further, replace one with something closer that fits the theme.
+4. Optimal geographic order — circular or linear logical route, NO crossings or zigzags. Stop #1 near a natural entry point (station, main square); last stop near a good place to end.
+5. ABSOLUTE thematic coherence — each stop MUST fit the route type. If you can't find enough valid stops of the requested type, return FEWER — NEVER pad with off-theme places.
 6. SPECIFIC, verifiable historical information: concrete dates, protagonist names, real events. No generic descriptions.
-7. REAL insider tips: if you don't know something verifiable, return null — DO NOT invent.
+7. REAL insider tips: optimal time, ticket booth, what to order, where to sit, what to avoid. If you don't know something verifiable for that site, return null — DO NOT invent.
 
 Exact JSON (no text outside the JSON):
 {
-  "routeStory": "Evocative opening narrative in 2-3 sentences adapted to the route type (gastronomic, dark, secret, etc.) — atmosphere, connecting thread, why it's worth it today. Lonely Planet style — literary but direct, passionate.",
+  "routeStory": "Evocative opening narrative in 2-3 sentences: atmosphere, connecting thread, why this route is worth doing today. Lonely Planet style — literary but direct, passionate, inviting the reader to step out now.",
   "suggestedPOIs": [
     {
-      "name": "Official full name in ${locationDesc} as on Wikipedia",
-      "category": "precise category adapted to the type (market/tavern/cemetery/garden/etc)",
-      "reason": "Why this specific place at this position in the route: 1-2 specific, memorable facts ADAPTED to the route type",
-      "insiderTip": "Verifiable concrete tip. null if unsure."
+      "name": "Official full name in ${locationDesc} as it appears on Wikipedia (local language or English)",
+      "category": "precise category (cathedral/museum/square/palace/garden/market/neighborhood/church/etc)",
+      "reason": "Why this specific place at this position in the route: 1-2 specific, memorable historical or cultural facts",
+      "insiderTip": "Verifiable practical tip: best time, free entry, detail few notice, what to order, best photo spot. null if nothing relevant or unsure."
     }
   ]
 }`
 
   try {
-    const text = await callAI(system, user, getAIKey(userKey), 1800)
+    const text = await callAI(system, user, getAIKey(userKey), 2800)
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
     const result = JSON.parse(jsonMatch[0]) as AIRouteResult
@@ -389,24 +388,23 @@ export async function generateAIAudioScript(
   routeType?: RouteType,
 ): Promise<string | null> {
   const styleHint = routeType ? narrationStyle(routeType, lang) : ''
-
   const system =
     lang === 'es'
-      ? `Eres un guía turístico de nivel Lonely Planet — apasionado, carismático, con anécdotas. Tu estilo es CONVERSACIONAL y VIVO:
-- Hablas directamente al visitante: "Fíjate en...", "Levanta la vista...", "¿Sabes lo que pasó aquí?"
-- Preguntas retóricas que crean suspense
-- Datos CONCRETOS y verificables con entusiasmo: fechas, nombres, eventos — no descripciones genéricas
-- Sentido del humor y cariño por los lugares
-- Frases cortas, pausas dramáticas con puntos y comas
+      ? `Eres un guía turístico apasionado y carismático, como los mejores guías de Civitatis o Rick Steves en español. Tu estilo de narración es completamente CONVERSACIONAL y VIVO:
+- Hablas directamente al visitante: "Fíjate en...", "Levanta la vista y verás...", "¿Sabes lo que pasó aquí?"
+- Usas preguntas retóricas para crear suspense: "¿Te imaginas lo que fue...?"
+- Das datos concretos y sorprendentes con entusiasmo, no como un libro de texto
+- Tienes sentido del humor y cariño por los lugares
+- Usas frases cortas y pausas dramáticas con puntos y comas
 - Tuteas siempre, en español de España
-- Nunca suenas como Wikipedia — suenas como alguien que conoce este lugar de primera mano`
-      : `You are a Lonely Planet-level tour guide — passionate, charismatic, full of anecdotes. Your style is CONVERSATIONAL and LIVELY:
-- Address the visitor directly: "Look at...", "Raise your eyes...", "Do you know what happened here?"
-- Rhetorical questions that build suspense
-- CONCRETE, verifiable facts with enthusiasm: dates, names, events — no generic descriptions
-- Warmth and humour
-- Short sentences, dramatic pauses with periods and commas
-- Never sound like Wikipedia — sound like someone who knows this place first-hand`
+- Nunca suenas como Wikipedia — suenas como alguien que ama este lugar`
+      : `You are a passionate and charismatic tour guide, like the best Civitatis or Rick Steves guides. Your narration style is completely CONVERSATIONAL and LIVELY:
+- Address the visitor directly: "Look at...", "Raise your eyes and you'll see...", "Do you know what happened here?"
+- Use rhetorical questions to build suspense: "Can you imagine what it was like...?"
+- Share concrete, surprising facts with enthusiasm, not like a textbook
+- You have warmth and humor
+- Short sentences and dramatic pauses with periods and commas
+- Never sound like Wikipedia — sound like someone who loves this place`
 
   const user =
     lang === 'es'
@@ -477,26 +475,26 @@ export async function generateAIPOIExplanation(
 
 ${description ? `INFORMACIÓN DE BASE VERIFICADA (extrae fechas, nombres, eventos concretos):\n${description.slice(0, 2500)}` : ''}
 
-ESTRUCTURA OBLIGATORIA (seis bloques):
+ESTRUCTURA OBLIGATORIA (seis bloques cortos):
 0. CONFIRMACIÓN VISUAL (1-2 frases): "Mira la imagen en pantalla — ¿ves [descripción visual breve y reconocible]? Eso es ${poiName}."
-1. HOOK INMEDIATO (1 frase): pregunta sorprendente, imagen vívida o dato impactante.
-2. HISTORIA CON DATOS (3-4 frases): 3-4 hechos CONCRETOS extraídos de la información — fechas, protagonistas, eventos reales. NO genéricos.
+1. HOOK INMEDIATO (1 frase): pregunta sorprendente, imagen vívida o dato impactante que enganche al instante.
+2. HISTORIA CON DATOS (2-3 frases): 2-3 hechos concretos extraídos de la información de base — fechas, protagonistas, eventos reales. NO genéricos.
 3. ANÉCDOTA O CURIOSIDAD (1-2 frases): leyenda, detalle arquitectónico, historia humana — lo que se recuerda al volver del viaje.
 4. INSIDER TIP (1 frase): consejo práctico verificable (mejor hora, entrada, secreto). Si no hay nada fiable, omite este bloque — NO inventes.
-5. CIERRE INVITANTE (1-2 frases): "Fíjate en...", "Antes de seguir, observa..."
+5. CIERRE INVITANTE (1 frase): "Fíjate en...", "Antes de seguir, observa..."
 
 300-380 palabras. Voz cálida, apasionada, español de España, tuteo. Estilo Lonely Planet / Civitatis. SOLO la narración, sin comillas, sin títulos, sin viñetas.`
       : `Generate an audio explanation about "${poiName}"${cityName ? ` in ${cityName}` : ''}.
 
 ${description ? `VERIFIED BACKGROUND INFO (extract concrete dates, names, events):\n${description.slice(0, 2500)}` : ''}
 
-REQUIRED STRUCTURE (six blocks):
+REQUIRED STRUCTURE (six short blocks):
 0. VISUAL CONFIRMATION (1-2 sentences): "Look at the image on screen — do you see [brief recognisable visual description]? That's ${poiName}."
 1. IMMEDIATE HOOK (1 sentence): surprising question, vivid image or striking fact.
-2. STORY WITH FACTS (3-4 sentences): 3-4 CONCRETE facts from the background info — dates, protagonists, real events. NOT generic.
+2. STORY WITH FACTS (2-3 sentences): 2-3 concrete facts from the background info — dates, protagonists, real events. NOT generic.
 3. ANECDOTE OR CURIOSITY (1-2 sentences): legend, architectural detail, human story — the thing travellers remember at home.
 4. INSIDER TIP (1 sentence): verifiable practical tip (best time, entry, secret). If nothing reliable, skip this block — do NOT invent.
-5. INVITING CLOSE (1-2 sentences): "Look at...", "Before moving on, notice..."
+5. INVITING CLOSE (1 sentence): "Look at...", "Before moving on, notice..."
 
 300-380 words. Warm, passionate voice. Lonely Planet / Civitatis style. ONLY the narration, no quotes, no titles, no bullets.`
 
