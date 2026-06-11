@@ -7,9 +7,7 @@ import { NavigationPanel } from '../components/NavigationPanel'
 import { BottomSheet } from '../components/ui/BottomSheet'
 import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
-import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
-import { getAudioScript } from '../services/storage'
-import { generateAIAudioScript, hasAIKey, getAIKey } from '../services/ai'
+import { buildNarration, prefetchNarration } from '../services/narration'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
 import { speak, stop as stopTTS } from '../services/tts'
 import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services/backgroundKeepAlive'
@@ -217,52 +215,30 @@ export function ActiveRoutePage() {
     markPOIsVisited(currentRoute.city.id, [currentPOI.name])
   }, [phase, currentPOI?.id])
 
-  // ---- Load audio when entering at_poi (AI-enhanced when key available) ----
+  // ---- Load audio when entering at_poi (cache → in-flight prefetch → fresh) ----
   useEffect(() => {
     if (phase !== 'at_poi' || !currentPOI) return
     setAudioLoading(true)
     setAudioScript('')
 
-    async function loadAudio() {
-      // 1. Try offline cache first
-      const cached = await getAudioScript(currentPOI!.id, language)
-      if (cached) { setAudioScript(cached); setAudioLoading(false); return }
+    let cancelled = false
+    buildNarration(currentPOI, language, anthropicApiKey)
+      .then(script => { if (!cancelled) setAudioScript(script) })
+      .catch(() => { /* narration failed — player simply stays empty */ })
+      .finally(() => { if (!cancelled) setAudioLoading(false) })
 
-      // 2. Fetch Wikipedia description
-      const desc = await getPOIDescription(currentPOI!.name, language)
+    // PREFETCH: while the visitor listens/looks around, pre-generate the
+    // NEXT stop's narration in the background so the next arrival is instant.
+    prefetchNarration(pois[currentPOIIndex + 1], language, anthropicApiKey)
 
-      // 3. If AI key available (built-in or user), use Mistral for professional narration
-      if (hasAIKey(anthropicApiKey)) {
-        const insiderTip = currentPOI!.tags?.['insiderTip'] || undefined
-        const reason = currentPOI!.shortDescription || ''
-        const aiScript = await generateAIAudioScript(
-          currentPOI!.name,
-          currentPOI!.category,
-          desc || '',
-          reason,
-          insiderTip,
-          language,
-          getAIKey(anthropicApiKey),
-          currentPOI!.routeType, // per-type narration style (dark history, gastronomy…)
-        )
-        if (aiScript) { setAudioScript(aiScript); setAudioLoading(false); return }
-      }
-
-      // 4. Fallback to template-based script
-      setAudioScript(generateAudioScript(
-        {
-          name: currentPOI!.name,
-          category: currentPOI!.category,
-          description: desc || undefined,
-          insiderTip: currentPOI!.tags?.['insiderTip'] || undefined,
-        },
-        language
-      ))
-      setAudioLoading(false)
-    }
-
-    loadAudio()
+    return () => { cancelled = true }
   }, [phase, currentPOI?.id])
+
+  // ---- Prefetch first narration as soon as the route screen opens ----
+  useEffect(() => {
+    if (pois.length === 0) return
+    prefetchNarration(pois[0], language, anthropicApiKey)
+  }, [pois])
 
   // ---- Reset step index on POI change ----
   useEffect(() => {

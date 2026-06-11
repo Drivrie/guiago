@@ -133,12 +133,13 @@ export function speak(
 
   if (chunks.length === 0) return
 
+  startResumeWatchdog()
   speakChunks(
     chunks,
     0,
     lang,
     rate,
-    () => { isActive = false; options?.onEnd?.() },
+    () => { isActive = false; stopResumeWatchdog(); options?.onEnd?.() },
     options?.onStart
   )
 }
@@ -147,6 +148,7 @@ export function stop(): void {
   if (!isSupported()) return
   stopRequested = true
   isActive = false
+  stopResumeWatchdog()
   window.speechSynthesis.cancel()
 }
 
@@ -176,6 +178,36 @@ export function setRate(rate: number): void {
 
 export function getRate(): number {
   return currentRate
+}
+
+// ---------------------------------------------------------------------------
+// iOS resume hardening.
+// iOS Safari pauses speechSynthesis when the app goes to background / the
+// screen locks, and does NOT auto-resume on return — the guide just goes
+// silent mid-sentence. We resume on visibilitychange, and keep a watchdog
+// while speaking because iOS sometimes reports paused=false while actually
+// stalled (resume() is a safe no-op in that case).
+// ---------------------------------------------------------------------------
+let resumeWatchdog: ReturnType<typeof setInterval> | null = null
+
+function startResumeWatchdog(): void {
+  if (resumeWatchdog) return
+  resumeWatchdog = setInterval(() => {
+    if (!isActive) { stopResumeWatchdog(); return }
+    if (window.speechSynthesis.paused) window.speechSynthesis.resume()
+  }, 3000)
+}
+
+function stopResumeWatchdog(): void {
+  if (resumeWatchdog) { clearInterval(resumeWatchdog); resumeWatchdog = null }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && isActive && window.speechSynthesis?.paused) {
+      window.speechSynthesis.resume()
+    }
+  })
 }
 
 export function loadVoices(): Promise<SpeechSynthesisVoice[]> {
@@ -227,11 +259,13 @@ export function prepareTextForSpeech(text: string, lang: 'es' | 'en' = 'es'): st
       .replace(/\bc\.\s/g, 'circa ')
   }
 
-  // Truncate to ~1200 chars finding last complete sentence
-  if (t.length > 1200) {
-    const sub = t.substring(0, 1200)
+  // Truncate to ~4000 chars (≈ 600 words / 4-5 min of speech) at the last
+  // complete sentence. Must stay ABOVE the AI narration target (320-420
+  // words ≈ 2500-3000 chars) or the guide gets cut off mid-story.
+  if (t.length > 4000) {
+    const sub = t.substring(0, 4000)
     const last = Math.max(sub.lastIndexOf('.'), sub.lastIndexOf('!'), sub.lastIndexOf('?'))
-    t = last > 600 ? sub.substring(0, last + 1) : sub + '...'
+    t = last > 2000 ? sub.substring(0, last + 1) : sub + '...'
   }
 
   return t

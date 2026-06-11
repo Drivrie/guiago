@@ -176,27 +176,37 @@ export function RouteSetupPage() {
         if (aiResult && aiResult.suggestedPOIs.length > 0) {
           setAiRouteStory(aiResult.routeStory)
 
-          // Resolve each AI-suggested POI to real Wikipedia coordinates
+          // Resolve each AI-suggested POI to real Wikipedia coordinates.
+          // ALL lookups run in PARALLEL — sequentially this took 15-30 s
+          // (each POI = 2-6 HTTP round-trips); in parallel it takes the
+          // duration of the slowest single lookup (~2-4 s).
           setLoading(true, language === 'es' ? '🔍 Verificando lugares en Wikipedia...' : '🔍 Verifying places on Wikipedia...')
 
+          const lookups = await Promise.allSettled(
+            aiResult.suggestedPOIs.map(aiPOI =>
+              searchPOIByName(aiPOI.name, selectedCity, selectedRouteType, language)
+                .then(wikiPOI => ({ aiPOI, wikiPOI }))
+            )
+          )
+
           const resolvedPOIs: POI[] = []
-          for (const aiPOI of aiResult.suggestedPOIs) {
-            const wikiPOI = await searchPOIByName(aiPOI.name, selectedCity, selectedRouteType, language)
-            if (wikiPOI) {
-              const distDeg = Math.sqrt(
-                Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
-                Math.pow(wikiPOI.lon - selectedCity.lon, 2)
-              )
-              if (distDeg > 0.5) {
-                console.warn(`Rejected out-of-city POI: ${wikiPOI.name} (${wikiPOI.lat},${wikiPOI.lon}) for ${selectedCity.name}`)
-                continue
-              }
-              resolvedPOIs.push({
-                ...wikiPOI,
-                shortDescription: aiPOI.reason,
-                tags: { ...(wikiPOI.tags || {}), insiderTip: aiPOI.insiderTip || '' },
-              })
+          for (const settled of lookups) {
+            if (settled.status !== 'fulfilled') continue
+            const { aiPOI, wikiPOI } = settled.value
+            if (!wikiPOI) continue
+            const distDeg = Math.sqrt(
+              Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
+              Math.pow(wikiPOI.lon - selectedCity.lon, 2)
+            )
+            if (distDeg > 0.5) {
+              console.warn(`Rejected out-of-city POI: ${wikiPOI.name} (${wikiPOI.lat},${wikiPOI.lon}) for ${selectedCity.name}`)
+              continue
             }
+            resolvedPOIs.push({
+              ...wikiPOI,
+              shortDescription: aiPOI.reason,
+              tags: { ...(wikiPOI.tags || {}), insiderTip: aiPOI.insiderTip || '' },
+            })
           }
 
           // Accept any AI-resolved POIs — STEP 2 always supplements from
@@ -311,33 +321,28 @@ export function RouteSetupPage() {
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
 
-      // Build OSRM segments
-      const segments: RouteSegment[] = []
-      let totalDistance = 0
-      let totalDuration = 0
+      // Build OSRM segments — all legs fetched in PARALLEL (sequentially this
+      // added 1-2 s per stop; in parallel it costs one round-trip total).
+      // Order is preserved because we map over index pairs.
+      const segmentResults = await Promise.all(
+        pois.slice(0, -1).map(async (from, i) => {
+          const to = pois[i + 1]
+          try {
+            const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]], language)
+            if (result) {
+              const steps = getStepByStepInstructions(result)
+              return { from, to, steps, distance: result.distance, duration: result.duration, geometry: result.geometry.coordinates, real: true }
+            }
+          } catch { /* fall through to direct */ }
+          const direct = getDirectRoute(from, to)
+          const steps = getStepByStepInstructions(direct)
+          return { from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] as [number, number][], real: false }
+        })
+      )
 
-      for (let i = 0; i < pois.length - 1; i++) {
-        const from = pois[i], to = pois[i + 1]
-        try {
-          const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]], language)
-          if (result) {
-            // Parse steps for navigation
-            const steps = getStepByStepInstructions(result)
-            segments.push({ from, to, steps, distance: result.distance, duration: result.duration, geometry: result.geometry.coordinates })
-            totalDistance += result.distance
-            totalDuration += result.duration
-          } else {
-            // OSRM failed — use direct compass navigation as fallback
-            const direct = getDirectRoute(from, to)
-            const steps = getStepByStepInstructions(direct)
-            segments.push({ from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
-          }
-        } catch {
-            const direct = getDirectRoute(from, to)
-            const steps = getStepByStepInstructions(direct)
-            segments.push({ from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] })
-        }
-      }
+      const segments: RouteSegment[] = segmentResults.map(({ real: _real, ...seg }) => seg)
+      const totalDistance = segmentResults.reduce((sum, s) => sum + (s.real ? s.distance : 0), 0)
+      const totalDuration = segmentResults.reduce((sum, s) => sum + (s.real ? s.duration : 0), 0)
 
       const route: Route = {
         id: `${selectedCity.id}-${usedRouteType}-${Date.now()}`,
