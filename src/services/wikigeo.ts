@@ -51,16 +51,36 @@ function wikiLangsForCity(city: City, lang: Language): string[] {
   return result
 }
 
-// Keywords per route type for scoring Wikipedia articles
+// Keywords per route type for scoring Wikipedia articles — extended with
+// English / international terms so the geosearch works for any city.
 const ROUTE_KEYWORDS: Record<RouteType, RegExp> = {
   imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|principal|basílica|castillo|torre|plaza mayor|famoso|turístico|cathedral|palace|castle|museum|monument|heritage|iconic|famous|landmark|basilica|tower|main square|historic|plaza|square|bridge|puente|gate|puerta|wall|muralla|temple|templo|market|mercado/i,
-  secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local|vecinos|cotidiano|alternativo|auténtico|escondido|peculiar|mercadillo|taberna|pasaje|patio|calleja/i,
-  monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|real|alcazaba|mezquita|sinagoga|alhambra|fortaleza/i,
-  historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|fusilamiento|memorial|asesinato|tragedia|holocausto/i,
-  curiosidades: /fuente|estatua|escultura|plaza|barrio|leyenda|misterio|insólito|secreto|subterráneo|peculiar|curiosidad|raro|extraño/i,
-  gastronomia: /mercado|gastronom|vino|tapas|cocina|taberna|bodega|feria|restaurante|jamón|queso|aceite|mariscos/i,
-  arquitectura: /arquitectura|barroco|gótico|renacimiento|mudéjar|modernismo|neoclásico|románico|art.*nouveau|estilo|fachada|claustro/i,
-  naturaleza: /parque|jardín|río|arroyo|sierra|monte|playa|laguna|reserva|bosque|dehesa|marisma|huerta|alameda/i,
+  secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local|vecinos|cotidiano|alternativo|auténtico|escondido|peculiar|mercadillo|taberna|pasaje|patio|calleja|hidden|secret|local favourite|tucked away|quiet|backstreet|alley|courtyard|insider/i,
+  monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|real|alcazaba|mezquita|sinagoga|alhambra|fortaleza|cathedral|basilica|palace|castle|wall|tower|museum|monument|chapel|church|convent|abbey|royal|fort/i,
+  historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|fusilamiento|memorial|asesinato|tragedia|holocausto|peste|tortura|verdugo|brujas|judería|pogromo|cemetery|graveyard|inquisition|war|battle|massacre|execution|prison|jail|victims|firing squad|murder|tragedy|holocaust|plague|torture|witches|ghetto|pogrom|haunted|crime/i,
+  curiosidades: /fuente|estatua|escultura|leyenda|misterio|insólito|secreto|subterráneo|peculiar|curiosidad|raro|extraño|único|extraordinario|inusual|excéntrico|fountain|statue|sculpture|legend|mystery|unusual|peculiar|curiosity|odd|strange|unique|extraordinary|eccentric|smallest|oldest|narrowest|tallest|hidden|underground|mural|street art|graffiti|easter egg|quirky/i,
+  gastronomia: /mercado|gastronom|vino|tapas|cocina|taberna|bodega|feria|restaurante|jamón|queso|aceite|mariscos|tabernero|chef|chocolatería|pastelería|cervecería|sidrería|asador|denominación de origen|market|gastronom|wine|tapas|cuisine|tavern|winery|food fair|restaurant|ham|cheese|olive oil|seafood|brewery|chocolaterie|patisserie|cider house|grill|protected designation/i,
+  arquitectura: /arquitectura|barroco|gótico|renacimiento|mudéjar|modernismo|neoclásico|románico|art.*nouveau|estilo|fachada|claustro|cúpula|art déco|bauhaus|brutalismo|architecture|baroque|gothic|renaissance|moorish|modernism|neoclassical|romanesque|style|façade|facade|cloister|dome|art deco|brutalism/i,
+  naturaleza: /parque|jardín|río|arroyo|sierra|monte|playa|laguna|reserva|bosque|dehesa|marisma|huerta|alameda|cascada|lago|estanque|park|garden|river|stream|mountain|beach|lagoon|reserve|forest|woodland|marsh|waterfall|lake|pond|greenway|botanical/i,
+}
+
+// Off-theme categories per route type — articles that obviously belong to a
+// DIFFERENT route theme should be rejected outright (otherwise a famous
+// cathedral surfaces as a "gastronomic" result just because Wikipedia has a
+// long article about it).
+//
+// Empty regex (`(?!)`) means "no off-theme exclusions" — used for the
+// imprescindibles / monumental / arquitectura types where landmark articles
+// are the legitimate target.
+const OFF_THEME_KEYWORDS: Record<RouteType, RegExp> = {
+  imprescindibles: /(?!)/,
+  monumental: /(?!)/,
+  arquitectura: /(?!)/,
+  gastronomia: /\b(catedral|cathedral|basílica|basilica|sinagoga|synagogue|mezquita|mosque|convento|convent|monasterio|monastery|cementerio|cemetery|necrópolis|necropolis|batalla|battle|guerra militar)\b/i,
+  historia_negra: /\b(jardín botánico|botanical garden|parque urbano|public park|fuente decorativa|decorative fountain|mercado de abastos|food market|wine festival|sidrería|cider house|panadería|bakery|restaurante|restaurant|cafetería|cafe)\b/i,
+  curiosidades: /\b(banco central|central bank|hospital general|general hospital|ayuntamiento sede|city hall headquarters|aeropuerto|airport)\b/i,
+  secretos_locales: /(?!)/, // handled by fame inverse weighting instead
+  naturaleza: /\b(catedral|cathedral|basílica|basilica|palacio|palace|castillo|castle|museo|museum|sinagoga|synagogue|mezquita|mosque|inquisición|inquisition|ejecución|execution)\b/i,
 }
 
 // For imprescindibles, also use the combined score across ALL types
@@ -78,19 +98,47 @@ function cleanHtml(html: string): string {
     .replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * Score a Wikipedia article for relevance to the requested route type.
+ *
+ * THE KEYWORD GATE: for any route type EXCEPT `imprescindibles`, an article
+ * with zero on-theme keyword matches returns score 0 (and the caller drops
+ * it via `_score > 0` filtering). This prevents famous-but-off-theme
+ * landmarks (cathedrals, palaces) from drowning out genuine gastronomía,
+ * naturaleza, historia_negra, curiosidades POIs just because they have long
+ * Wikipedia articles. Length and heritage bonuses ONLY apply on top of a
+ * positive keyword match — they amplify on-theme hits, never lift off-theme
+ * ones.
+ *
+ * For `imprescindibles`, any landmark-keyword match across all themes is
+ * accepted: it's the catch-all "best-of" type that should surface the
+ * city's most iconic sites regardless of niche.
+ */
 function scoreArticle(title: string, extract: string, routeType: RouteType): number {
-  const text = `${title} ${extract.slice(0, 400)}`
-  // Article-length bonus: deeper Wikipedia articles correlate with more important landmarks.
-  const lengthBonus = extract.length > 1500 ? 4 : extract.length > 800 ? 3 : extract.length > 400 ? 2 : extract.length > 200 ? 1 : 0
-  // Heritage / UNESCO / national-monument status is a strong signal of touristic importance.
-  const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building|denkmalliste/i.test(extract) ? 6 : 0
+  const text = `${title} ${extract.slice(0, 600)}`
+
+  // OFF-THEME REJECTION — articles whose title/intro clearly belong to a
+  // different theme score 0 outright. Biggest single lever for route-type
+  // differentiation.
+  const offThemeRe = OFF_THEME_KEYWORDS[routeType]
+  if (offThemeRe.source !== '(?!)' && offThemeRe.test(text)) return 0
+
   if (routeType === 'imprescindibles') {
     const allMatches = (text.match(ALL_KEYWORDS_RE) || []).length
+    if (allMatches === 0 && extract.length < 600) return 0
     const notorietyBonus = /turístico|famoso|emblemático|icónico|símbolo|principal|destacad|patrimonio|unesco|known for|famous|landmark|iconic|renowned|world-famous/i.test(text) ? 4 : 0
-    return allMatches + notorietyBonus + lengthBonus + heritageBonus
+    const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building|denkmalliste/i.test(extract) ? 6 : 0
+    const lengthBonus = extract.length > 1500 ? 4 : extract.length > 800 ? 3 : extract.length > 400 ? 2 : 0
+    return allMatches + notorietyBonus + heritageBonus + lengthBonus
   }
+
   const re = new RegExp(ROUTE_KEYWORDS[routeType].source, 'gi')
-  return (text.match(re) || []).length + lengthBonus + heritageBonus
+  const themeMatches = (text.match(re) || []).length
+  if (themeMatches === 0) return 0   // THE GATE — drop everything off-theme
+
+  const lengthBonus = extract.length > 1500 ? 3 : extract.length > 800 ? 2 : extract.length > 400 ? 1 : 0
+  const heritageBonus = /unesco|patrimonio mundial|world heritage|monumento nacional|national monument|bien de interés cultural|bic\b|listed building/i.test(extract) ? 4 : 0
+  return themeMatches * 2 + lengthBonus + heritageBonus
 }
 
 /** Sitelinks weight per route type — how much international fame matters
@@ -102,10 +150,10 @@ function fameWeight(routeType: RouteType): number {
     case 'monumental': return 0.9
     case 'arquitectura': return 0.7
     case 'historia_negra': return 0.4
-    case 'gastronomia': return 0.4
-    case 'curiosidades': return 0.4
+    case 'gastronomia': return 0.3
+    case 'curiosidades': return 0.3
     case 'naturaleza': return 0.5
-    case 'secretos_locales': return 0.1  // local secrets are by definition not internationally famous
+    case 'secretos_locales': return 0.05  // local secrets are by definition not internationally famous
     default: return 0.5
   }
 }
@@ -118,12 +166,14 @@ function guessVisitMinutes(title: string, extract: string): number {
   if (/palacio|palace|alcázar|alhambra|alcazaba/.test(t)) return 18
   if (/castillo|castle|fortaleza|muralla/.test(t)) return 15
   if (/parque|jardín|park|garden/.test(t)) return 12
-  if (/mercado|market/.test(t)) return 15
-  if (/plaza|square|piazza/.test(t)) return 8
+  if (/mercado|market/.test(t)) return 20
+  if (/restaurante|restaurant|taberna|tavern|bar|café|cafe/.test(t)) return 45
+  if (/plaza|square|piazza/.test(t)) return 10
   if (/puente|bridge|pont/.test(t)) return 8
   if (/iglesia|church|convento|monasterio|chapel/.test(t)) return 12
   if (/torre|tower/.test(t)) return 10
-  return 12
+  if (/cementerio|cemetery|prisión|prison/.test(t)) return 20
+  return 15
 }
 
 function guessCategory(title: string, extract: string, routeType: RouteType): string {
@@ -335,8 +385,11 @@ export async function searchPOIsWikipedia(
       scored.sort((a, b) => b._score - a._score)
     }
 
-    const relevant = scored.filter(p => p._score > 0)
-    const result = relevant.length >= 2 ? relevant : scored
+    // Always honour the theme gate — never silently surface off-theme
+    // (score 0) articles even when no on-theme article was found. An empty
+    // result triggers the theme-preserving fallback chain in RouteSetupPage,
+    // which is preferable to a "gastronomic route showing only cathedrals".
+    const result = scored.filter(p => p._score > 0)
 
     return result.slice(0, maxPOIs).map(({ _score: _, _lang: __, ...poi }) => poi)
   } catch (err) {

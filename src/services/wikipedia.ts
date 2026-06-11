@@ -110,7 +110,7 @@ async function fetchPOIFromMediaWiki(
       titles: name,
       prop: 'extracts|pageimages',
       exintro: 'true',
-      exchars: '3000',
+      exchars: '6000',
       pithumbsize: '600',
       format: 'json',
       origin: '*'
@@ -150,7 +150,7 @@ async function fetchPOIFromMediaWiki(
     // 3. Fetch full article for first result
     const fullParams = new URLSearchParams({
       action: 'query', pageids: String(results[0].pageid),
-      prop: 'extracts|pageimages', exintro: 'true', exchars: '1500',
+      prop: 'extracts|pageimages', exintro: 'true', exchars: '6000',
       pithumbsize: '600', format: 'json', origin: '*'
     })
     const fullResp = await fetch(`${apiBase}?${fullParams}`)
@@ -173,10 +173,22 @@ async function fetchPOIFromMediaWiki(
 
 export async function getPOIDescription(name: string, lang: Language = 'es'): Promise<string> {
   try {
-    const result = await getPOIInfo(name, lang)
-    if (result?.extract) {
-      return result.extract
+    // Merge Wikipedia + Wikivoyage so the narration prompt receives BOTH
+    // encyclopedic context (history, dates, names) and travel-guide flavour
+    // (what to see, when to go, anecdotes). This is what unlocks Civitatis-
+    // quality narrations: the AI no longer has to invent the travel-tip half.
+    const [wikiRes, voyageRes] = await Promise.allSettled([
+      fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
+      fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
+    ])
+    const wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
+    const voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
+    const parts: string[] = []
+    if (wiki?.extract) parts.push(wiki.extract)
+    if (voyage?.extract && (!wiki?.extract || !wiki.extract.includes(voyage.extract.slice(0, 40)))) {
+      parts.push(voyage.extract)
     }
+    if (parts.length > 0) return parts.join(' ').trim()
     return generateFallbackDescription(name, lang)
   } catch (error) {
     console.error('Error getting POI description:', error)
@@ -290,6 +302,23 @@ function articleMatchesCity(article: WikiResult, context?: POILookupContext): bo
   return cityWord.test(haystack)
 }
 
+/** Rough title-similarity for "Qué visitar hoy" ranking: how closely does
+ *  the article's title match the user's free-text query?  Returns 0..1. */
+function titleSimilarity(query: string, title: string): number {
+  const q = query.toLowerCase().trim()
+  const t = title.toLowerCase().trim()
+  if (!q || !t) return 0
+  if (t === q) return 1
+  if (t.includes(q)) return 0.9
+  if (q.includes(t)) return 0.7
+  const qWords = new Set(q.split(/\s+/).filter(w => w.length > 2))
+  const tWords = new Set(t.split(/\s+/).filter(w => w.length > 2))
+  if (qWords.size === 0) return 0
+  let common = 0
+  for (const w of qWords) if (tWords.has(w)) common++
+  return common / qWords.size * 0.6
+}
+
 /**
  * Geo-validated POI lookup: uses Wikipedia geosearch around (lat,lon) so we only
  * accept articles physically located inside the user's city.
@@ -319,7 +348,7 @@ async function searchPOIByGeo(
     const detailParams = new URLSearchParams({
       action: 'query', pageids: pageIds,
       prop: 'extracts|pageimages|coordinates',
-      exintro: 'true', exchars: '1500',
+      exintro: 'true', exchars: '6000',
       pithumbsize: '600', colimit: '1',
       format: 'json', origin: '*'
     })
@@ -337,11 +366,11 @@ async function searchPOIByGeo(
     }
     const pages = detailData.query?.pages || {}
 
-    // Rank candidate hits by distance to the user — pick the CLOSEST that fits
-    // within `radiusMeters`. Previously we picked the first hit Wikipedia
-    // returned, which could be a famous-but-far place when a closer (and more
-    // relevant) match was lower in the search ranking.
-    type Candidate = { distM: number; page: { pageid?: number; title?: string; extract?: string; thumbnail?: { source?: string } } }
+    // Rank candidate hits by a combined score: title similarity to the user
+    // query (so "Catedral de Burgos" beats a nearby unrelated article that
+    // happens to be a few metres closer) + inverse distance (so a hit 200 m
+    // away beats one 3 km away when titles are equally close).
+    type Candidate = { combined: number; page: { pageid?: number; title?: string; extract?: string; thumbnail?: { source?: string } } }
     const candidates: Candidate[] = []
     for (const hit of hits) {
       const page = pages[String(hit.pageid)]
@@ -350,9 +379,12 @@ async function searchPOIByGeo(
       if (!coords) continue
       const distM = haversineMeters(lat, lon, coords.lat, coords.lon)
       if (distM > radiusMeters) continue
-      candidates.push({ distM, page })
+      const sim = titleSimilarity(name, page.title || '')
+      const proximity = Math.max(0, 1 - distM / radiusMeters)
+      const combined = sim * 100 + proximity * 20
+      candidates.push({ combined, page })
     }
-    candidates.sort((a, b) => a.distM - b.distM)
+    candidates.sort((a, b) => b.combined - a.combined)
 
     for (const { page } of candidates) {
       const extract = cleanWikiExtract(page.extract || '')

@@ -92,6 +92,89 @@ const ROUTE_TYPE_DESC: Record<RouteType, { es: string; en: string }> = {
 }
 
 // ---------------------------------------------------------------------------
+// Per-route-type guidance: detailed instructions per theme so the AI actually
+// returns DIFFERENT POIs for "gastronomía" vs "historia negra" vs "curiosidades"
+// instead of the same iconic landmarks. Includes explicit DO-NOT-INCLUDE lists
+// because the model's default behaviour is to recycle the top-3 tourist sights
+// for any prompt about a city.
+// ---------------------------------------------------------------------------
+function routeTypeGuidance(routeType: RouteType, lang: Language): string {
+  const es = lang === 'es'
+  switch (routeType) {
+    case 'imprescindibles':
+      return es
+        ? `OBJETIVO: los hitos más icónicos y mundialmente reconocidos de la ciudad — los que aparecerían en la portada de Lonely Planet. La parada nº 1 debe ser EL símbolo de la ciudad. Mezcla 1-2 plazas/calles emblemáticas para dar continuidad narrativa.`
+        : `GOAL: the most iconic, world-renowned landmarks — the ones that would appear on a Lonely Planet cover. Stop #1 must be THE symbol of the city. Include 1-2 emblematic squares/streets to give narrative flow.`
+    case 'monumental':
+      return es
+        ? `OBJETIVO: monumentos históricos de gran escala — catedrales, basílicas, palacios, castillos, murallas, fortificaciones, conventos famosos. PROHIBIDO: restaurantes, mercados, jardines puramente recreativos, fuentes ornamentales modernas.`
+        : `GOAL: large-scale historic monuments — cathedrals, basilicas, palaces, castles, walls, fortifications, famous convents. FORBIDDEN: restaurants, markets, purely recreational gardens, modern ornamental fountains.`
+    case 'arquitectura':
+      return es
+        ? `OBJETIVO: edificios destacados por su VALOR ARQUITECTÓNICO. Cada parada debe ilustrar un ESTILO o ÉPOCA DISTINTOS — gótico, mudéjar, renacentista, barroco, neoclásico, modernismo, racionalismo, contemporáneo. En el campo \`reason\`, NOMBRA el estilo y al arquitecto si es conocido. PROHIBIDO: lugares elegidos por su fama turística genérica si no aportan un valor arquitectónico claro.`
+        : `GOAL: buildings selected for their ARCHITECTURAL VALUE. Each stop must illustrate a DIFFERENT STYLE or ERA — Gothic, Mudéjar, Renaissance, Baroque, Neoclassical, Modernism, Rationalism, Contemporary. In the \`reason\` field, NAME the style and the architect when known. FORBIDDEN: places picked for generic tourist fame if they don't add clear architectural value.`
+    case 'gastronomia':
+      return es
+        ? `OBJETIVO: SOLO lugares relacionados con comida y bebida — mercados históricos de abastos, bares de tapas centenarios, tabernas tradicionales, bodegas con visita, chocolaterías y pastelerías legendarias, asadores, sidrerías, cervecerías, calles gastronómicas. Incluye 1-2 platos/bebidas concretos a probar en cada sitio y un rango de precio aproximado en el insiderTip. PROHIBIDO ABSOLUTAMENTE: catedrales, palacios, museos, iglesias, castillos, monumentos. Si solo conoces los grandes monumentos de esa ciudad, devuelve menos paradas — NUNCA rellenes con sitios no gastronómicos.`
+        : `GOAL: ONLY food-and-drink places — historic food markets, century-old tapas bars, traditional taverns, wineries open to visit, legendary chocolatiers and patisseries, grill restaurants, cider houses, breweries, foodie streets. Include 1-2 specific dishes/drinks to try at each spot, and a rough price range in insiderTip. ABSOLUTELY FORBIDDEN: cathedrals, palaces, museums, churches, castles, monuments. If you only know the city's big monuments, return FEWER stops — NEVER pad with non-gastronomic sites.`
+    case 'historia_negra':
+      return es
+        ? `OBJETIVO: SOLO lugares con historia oscura, trágica o macabra verificable — sitios de ejecuciones públicas, antiguas cárceles e Inquisición, hospitales de la peste, fosas comunes, cementerios con historia, escenarios de crímenes famosos, antiguas judérias tras pogromos, búnkeres y refugios de guerra, memoriales de víctimas, casas embrujadas con leyenda documentada. En el campo \`reason\` NOMBRA víctimas, fechas y eventos concretos. Tono respetuoso pero sin eufemismos. PROHIBIDO: monumentos famosos sin asociación histórica oscura clara, jardines bonitos, mercados de comida, restaurantes turísticos.`
+        : `GOAL: ONLY places with verifiable dark, tragic or macabre history — public execution sites, former prisons and Inquisition headquarters, plague hospitals, mass graves, cemeteries with history, scenes of famous crimes, former Jewish ghettos after pogroms, war bunkers and shelters, victims' memorials, haunted houses with documented legends. In the \`reason\` field NAME victims, dates and concrete events. Respectful tone, no euphemisms. FORBIDDEN: famous monuments with no clear dark-history association, pretty gardens, food markets, tourist restaurants.`
+    case 'curiosidades':
+      return es
+        ? `OBJETIVO: SOLO lugares RAROS, INSÓLITOS o SORPRENDENTES — la calle más estrecha, la casa más antigua, el detalle arquitectónico escondido, la estatua con leyenda urbana, un museo extravagante, un pasadizo desconocido, una excentricidad histórica, un easter egg en una fachada. Cada parada debe responder a "¿sabías que...?". PROHIBIDO: catedrales y palacios famosos como entrada principal — solo se aceptan si los presentas por una curiosidad SECUNDARIA muy específica (ej.: "la cripta secreta", "el grafiti medieval en la columna").`
+        : `GOAL: ONLY ODD, UNUSUAL or SURPRISING places — the narrowest street, the oldest house, the hidden architectural detail, the statue with an urban legend, a quirky museum, a forgotten passage, a historical eccentricity, an easter egg on a façade. Every stop must answer "did you know that...?". FORBIDDEN: famous cathedrals and palaces as the main entry — only acceptable if you frame them around a VERY SPECIFIC secondary curiosity (e.g. "the secret crypt", "the medieval graffiti on the column").`
+    case 'secretos_locales':
+      return es
+        ? `OBJETIVO: SOLO sitios que un guía LOCAL llevaría a un amigo, no a un turista — plazas de barrio, bares de viejos, patios escondidos, mercadillos de cercanía, calles peatonales fuera del circuito turístico, miradores poco conocidos, cafés donde los vecinos juegan al dominó, panaderías centenarias del barrio. EXCLUYE COMPLETAMENTE los 3-5 lugares más famosos de la ciudad (ej.: en Barcelona NO la Sagrada Familia ni el Park Güell; en París NO la Torre Eiffel; en Madrid NO el Prado ni el Palacio Real). El visitante quiere descubrir lo que NO sale en las guías.`
+        : `GOAL: ONLY places a LOCAL guide would take a friend, never a tourist — neighbourhood squares, old-timer bars, hidden courtyards, local markets, pedestrian streets off the tourist circuit, little-known viewpoints, cafés where neighbours play dominoes, century-old bakeries. COMPLETELY EXCLUDE the city's 3-5 most famous sights (e.g. in Barcelona NOT Sagrada Familia or Park Güell; in Paris NOT the Eiffel Tower; in Madrid NOT the Prado or Royal Palace). The visitor wants what's NOT in the guidebooks.`
+    case 'naturaleza':
+      return es
+        ? `OBJETIVO: SOLO espacios verdes y naturales — grandes parques históricos, jardines botánicos, jardines secretos, paseos arbolados, riberas y orillas, miradores naturales, bosques urbanos, lagos y estanques, vías verdes peatonales. Incluye plantas/aves emblemáticas si las conoces, y la mejor estación para visitar en el insiderTip. PROHIBIDO: catedrales, palacios, castillos, museos, restaurantes — salvo el café o quiosco DENTRO del parque.`
+        : `GOAL: ONLY green and natural spaces — large historic parks, botanical gardens, secret gardens, tree-lined walks, riverbanks, natural viewpoints, urban forests, lakes and ponds, pedestrian greenways. Include emblematic plants/birds if you know them, and the best season to visit in insiderTip. FORBIDDEN: cathedrals, palaces, castles, museums, restaurants — except a café or kiosk INSIDE the park.`
+  }
+}
+
+// Per-route-type narration style hints for the arrival audio script.
+function narrationStyle(routeType: RouteType, lang: Language): string {
+  const es = lang === 'es'
+  switch (routeType) {
+    case 'historia_negra':
+      return es
+        ? 'TONO ESPECÍFICO para historia negra: respetuoso pero con suspense; nombra víctimas y fechas concretas; describe qué pasó AQUÍ con detalle; evita los eufemismos; recoge una leyenda o testimonio si existe.'
+        : 'SPECIFIC TONE for dark history: respectful but with suspense; name victims and concrete dates; describe what happened HERE in detail; no euphemisms; include a legend or testimony if it exists.'
+    case 'gastronomia':
+      return es
+        ? 'TONO ESPECÍFICO para gastronomía: nombra 1-2 platos o bebidas EMBLEMÁTICOS del lugar, cómo se prepara y cuándo se inventó si lo sabes; cuenta a quién verás dentro (vecinos, oficinistas, viejos parroquianos); rango de precio aproximado; etiqueta local (¿se pide en barra o en mesa?, ¿se da propina?).'
+        : 'SPECIFIC TONE for gastronomy: name 1-2 EMBLEMATIC dishes or drinks, how they\'re made and when they were invented if you know; describe who you\'ll see inside (neighbours, office workers, old regulars); rough price range; local etiquette (do you order at the bar or table? do you tip?).'
+    case 'curiosidades':
+      return es
+        ? 'TONO ESPECÍFICO para curiosidades: pon en primer plano LO RARO — la frase debe empezar enganchando ("Lo que tienes delante esconde algo que pocos saben..."); revela el dato sorprendente en el segundo párrafo; cierra con un guiño cómplice.'
+        : 'SPECIFIC TONE for curiosities: foreground THE WEIRDNESS — the opening line should hook ("What you see here hides something few people know..."); reveal the surprising fact in the second paragraph; close with a knowing wink.'
+    case 'secretos_locales':
+      return es
+        ? 'TONO ESPECÍFICO para secretos locales: habla COMO UN LOCAL revelando algo personal; explica por qué este sitio importa a los vecinos del barrio; incluye una rutina cotidiana (a qué hora viene quién); no sea grandilocuente — íntimo.'
+        : 'SPECIFIC TONE for local secrets: speak LIKE A LOCAL revealing something personal; explain why this matters to the neighbourhood; include a daily routine (who comes at what time); not grandiloquent — intimate.'
+    case 'arquitectura':
+      return es
+        ? 'TONO ESPECÍFICO para arquitectura: nombra el ESTILO y al ARQUITECTO; señala 2-3 elementos visuales concretos a observar (ej.: "fíjate en las gárgolas del lado norte"); contextualiza la época y la técnica constructiva.'
+        : 'SPECIFIC TONE for architecture: name the STYLE and the ARCHITECT; point out 2-3 concrete visual elements to observe ("notice the gargoyles on the north side"); contextualise the era and the construction technique.'
+    case 'naturaleza':
+      return es
+        ? 'TONO ESPECÍFICO para naturaleza: describe sonidos, olores, colores estacionales; nombra especies vegetales o de aves emblemáticas; recomienda dónde sentarse y la mejor estación para visitarlo.'
+        : 'SPECIFIC TONE for nature: describe sounds, smells, seasonal colours; name emblematic plant or bird species; recommend where to sit and the best season to visit.'
+    case 'monumental':
+      return es
+        ? 'TONO ESPECÍFICO para monumental: contextualiza el poder que construyó este monumento, cuánto se tardó, qué materiales y de dónde; describe 2-3 elementos escultóricos o decorativos concretos a observar.'
+        : 'SPECIFIC TONE for monuments: contextualise the power that built this monument, how long it took, what materials and from where; describe 2-3 concrete sculptural or decorative elements to observe.'
+    case 'imprescindibles':
+    default:
+      return ''
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Timeout helper
 // ---------------------------------------------------------------------------
 
@@ -225,17 +308,15 @@ export async function generateAIRoute(
 - Duración total de visita: ${durationMinutes} minutos (sin contar desplazamientos)
 - Número de paradas: ${maxPOIs}${excludeClause}
 
-REGLA Nº 1 — RELEVANCIA REAL:
-${routeType === 'secretos_locales'
-  ? 'Selecciona joyas locales auténticas — sitios que un guía local llevaría a un amigo, no las trampas turísticas evidentes. PROHIBIDO usar los top-3 más obvios de la ciudad.'
-  : `Selecciona los lugares MÁS ICÓNICOS Y MUNDIALMENTE RECONOCIBLES de ${locationDesc}, ordenados estrictamente por fama internacional y relevancia turística — los que aparecerían en la portada de una guía Lonely Planet o National Geographic. NUNCA elijas un lugar de segunda fila si hay un equivalente más emblemático sin visitar. La parada nº 1 debe ser EL símbolo de la ciudad.`}
+REGLA Nº 1 — DIFERENCIACIÓN ESTRICTA POR TIPO DE RUTA:
+${routeTypeGuidance(routeType, lang)}
 
 REQUISITOS ESTRICTOS:
 1. TODOS los lugares deben estar FÍSICAMENTE en ${locationDesc} — no en otras ciudades, regiones ni países. Si dudas, NO lo incluyas.
 2. Usa los nombres OFICIALES exactamente como aparecen en Wikipedia (idioma local del país o inglés reconocible). Ejemplos: "Wawel Royal Castle" no "Castillo Wawel"; "Catedral de Burgos" no "Cathedral of Burgos".
 3. Distancia máxima entre paradas consecutivas: 600-800 metros a pie. Si dos POIs están más lejos, sustituye uno por algo más cercano que mantenga la coherencia.
 4. Orden geográfico óptimo — ruta circular o lineal lógica, SIN cruces ni zigzags. La parada nº 1 cerca de un acceso natural (estación, plaza principal) y la última cerca de un buen sitio para acabar.
-5. Coherencia temática perfecta — cada parada refuerza el hilo narrativo de la ruta.
+5. Coherencia temática ABSOLUTA — cada parada DEBE encajar en el tipo de ruta. Si no hay suficientes paradas válidas del tipo solicitado, devuelve MENOS — NUNCA rellenes con sitios off-theme.
 6. Información histórica ESPECÍFICA y verificable: fechas concretas, nombres de protagonistas, eventos reales. Nada de descripciones genéricas.
 7. Insider tips REALES: hora óptima, taquilla, qué pedir, dónde sentarse, qué evitar. Si no conoces algo verificable para ese sitio, devuelve null — NO inventes.
 
@@ -256,17 +337,15 @@ JSON exacto (sin texto fuera del JSON):
 - Total visit duration: ${durationMinutes} minutes (excluding walking)
 - Number of stops: ${maxPOIs}${excludeClause}
 
-RULE Nº 1 — REAL RELEVANCE:
-${routeType === 'secretos_locales'
-  ? 'Pick authentic local gems — places a local guide would take a friend, not the obvious tourist traps. DO NOT use the city\'s most obvious top-3 sites.'
-  : `Pick the MOST ICONIC AND WORLDWIDE RECOGNISABLE places in ${locationDesc}, strictly ranked by international fame and touristic relevance — the ones that would appear on a Lonely Planet or National Geographic cover. NEVER pick a second-tier place when a more emblematic equivalent has not been visited. Stop #1 must be THE symbol of the city.`}
+RULE Nº 1 — STRICT DIFFERENTIATION BY ROUTE TYPE:
+${routeTypeGuidance(routeType, lang)}
 
 STRICT REQUIREMENTS:
 1. ALL places must be PHYSICALLY in ${locationDesc} — not in other cities, regions or countries. If unsure, leave it out.
 2. Use OFFICIAL names exactly as they appear on Wikipedia (local language or widely recognised English). Examples: "Wawel Royal Castle" not "Castillo Wawel"; "Burgos Cathedral" not "Catedral de Burgos".
 3. Maximum distance between consecutive stops: 600-800 metres on foot. If two POIs are further, replace one with something closer that fits the theme.
 4. Optimal geographic order — circular or linear logical route, NO crossings or zigzags. Stop #1 near a natural entry point (station, main square); last stop near a good place to end.
-5. Perfect thematic coherence — every stop reinforces the route's narrative thread.
+5. ABSOLUTE thematic coherence — each stop MUST fit the route type. If you can't find enough valid stops of the requested type, return FEWER — NEVER pad with off-theme places.
 6. SPECIFIC, verifiable historical information: concrete dates, protagonist names, real events. No generic descriptions.
 7. REAL insider tips: optimal time, ticket booth, what to order, where to sit, what to avoid. If you don't know something verifiable for that site, return null — DO NOT invent.
 
@@ -305,8 +384,10 @@ export async function generateAIAudioScript(
   reason: string,
   insiderTip: string | null | undefined,
   lang: Language,
-  userKey: string
+  userKey: string,
+  routeType?: RouteType,
 ): Promise<string | null> {
+  const styleHint = routeType ? narrationStyle(routeType, lang) : ''
   const system =
     lang === 'es'
       ? `Eres un guía turístico apasionado y carismático, como los mejores guías de Civitatis o Rick Steves en español. Tu estilo de narración es completamente CONVERSACIONAL y VIVO:
@@ -329,39 +410,41 @@ export async function generateAIAudioScript(
     lang === 'es'
       ? `Genera la narración de audio AL LLEGAR a "${poiName}" (${category}).
 
-${wikiDescription ? `Contexto histórico verificado (úsalo para extraer fechas, nombres, eventos):\n${wikiDescription.slice(0, 1200)}` : ''}
+${wikiDescription ? `CONTEXTO HISTÓRICO VERIFICADO (extrae fechas, nombres y eventos concretos):\n${wikiDescription.slice(0, 2500)}` : ''}
 ${reason ? `\nPor qué es especial en esta ruta: ${reason}` : ''}
 ${insiderTip ? `\nDato insider verificado: ${insiderTip}` : ''}
+${styleHint ? `\n${styleHint}` : ''}
 
-ESTRUCTURA OBLIGATORIA (siete bloques cortos, en este orden):
-0. CONFIRMACIÓN VISUAL (1-2 frases): "Mira la imagen en tu pantalla — ¿ves [descripción breve y reconocible de lo que aparece]? Eso es ${poiName}, comprueba que lo tienes delante."
-1. HOOK INMEDIATO (1-2 frases): una pregunta sorprendente, una imagen vívida o un dato impactante que enganche al instante. NUNCA "Bienvenido" o "Aquí estamos".
-2. HISTORIA CON DATOS (2-3 frases): 2-3 hechos históricos CONCRETOS extraídos del contexto — fechas, nombres de protagonistas, eventos reales. Estilo "te lo cuento como a un amigo", no enciclopédico.
-3. DATO CURIOSO O ANÉCDOTA (1-2 frases): algo memorable, sorprendente o poco conocido — una leyenda, una rareza arquitectónica, una historia humana. Lo que la gente recuerda al volver del viaje.
-4. SIGNIFICADO CULTURAL (1 frase): por qué este lugar importa hoy — qué representa para la ciudad, qué simboliza, qué cambió.
+ESTRUCTURA OBLIGATORIA (siete bloques en este orden):
+0. CONFIRMACIÓN VISUAL (1-2 frases): "Mira la imagen en tu pantalla — ¿ves [descripción breve y reconocible]? Eso es ${poiName}, comprueba que lo tienes delante."
+1. HOOK INMEDIATO (1-2 frases): pregunta sorprendente, imagen vívida o dato impactante. NUNCA "Bienvenido" ni "Aquí estamos".
+2. HISTORIA CON DATOS (3-4 frases): 3-4 hechos históricos CONCRETOS extraídos del contexto — fechas, nombres, eventos reales. Tono "te lo cuento como a un amigo", no enciclopédico.
+3. ANÉCDOTA O CURIOSIDAD (1-2 frases): algo memorable, sorprendente o poco conocido — leyenda, rareza arquitectónica, historia humana. Lo que la gente recuerda al volver del viaje.
+4. SIGNIFICADO CULTURAL (1-2 frases): por qué este lugar importa hoy — qué representa, qué simboliza, qué cambió.
 5. INSIDER TIP (1 frase): si hay tip verificado, preséntalo como secreto: "Poca gente sabe que..." o "Mi consejo: ...". Si no hay tip fiable, omite este bloque.
-6. CIERRE INVITANTE (1 frase): "Tómate un minuto para...", "Antes de seguir, fíjate en...", "Acércate y observa..."
+6. CIERRE INVITANTE (1-2 frases): "Tómate un minuto para...", "Antes de seguir, fíjate en...", "Acércate y observa..."
 
-LONGITUD: 220-300 palabras. Voz viva, apasionada, en español de España, tuteo. Estilo Lonely Planet / Civitatis presencial. SOLO la narración, sin comillas, sin títulos, sin guiones, sin viñetas. Si los datos del contexto son escasos, sé conciso pero específico — no rellenes con tópicos.`
+LONGITUD: 320-420 palabras. Voz viva, apasionada, español de España, tuteo. Estilo Lonely Planet / Civitatis presencial. SOLO la narración, sin comillas, sin títulos, sin guiones, sin viñetas. Si los datos del contexto son escasos, sé conciso pero específico — no rellenes con tópicos ni inventes datos.`
       : `Generate audio narration ARRIVING AT "${poiName}" (${category}).
 
-${wikiDescription ? `Verified historical context (use it to extract dates, names, events):\n${wikiDescription.slice(0, 1200)}` : ''}
+${wikiDescription ? `VERIFIED HISTORICAL CONTEXT (extract concrete dates, names and events):\n${wikiDescription.slice(0, 2500)}` : ''}
 ${reason ? `\nWhy it's special on this route: ${reason}` : ''}
 ${insiderTip ? `\nVerified insider tip: ${insiderTip}` : ''}
+${styleHint ? `\n${styleHint}` : ''}
 
-REQUIRED STRUCTURE (seven short blocks, in this order):
-0. VISUAL CONFIRMATION (1-2 sentences): "Take a look at the image on your screen — do you see [brief, recognisable description of what's shown]? That's ${poiName}; make sure it's right in front of you."
-1. IMMEDIATE HOOK (1-2 sentences): a surprising question, a vivid image or a striking fact. NEVER "Welcome" or "Here we are".
-2. STORY WITH FACTS (2-3 sentences): 2-3 CONCRETE historical facts from the context — dates, protagonists' names, real events. "Telling a friend" tone, not encyclopedic.
-3. CURIOUS DETAIL OR ANECDOTE (1-2 sentences): something memorable, surprising or little-known — a legend, an architectural quirk, a human story. The thing travellers remember when they get home.
-4. CULTURAL SIGNIFICANCE (1 sentence): why this place matters today — what it stands for, what it symbolises, what it changed.
+REQUIRED STRUCTURE (seven blocks in this order):
+0. VISUAL CONFIRMATION (1-2 sentences): "Take a look at the image on your screen — do you see [brief, recognisable description]? That's ${poiName}; make sure it's right in front of you."
+1. IMMEDIATE HOOK (1-2 sentences): surprising question, vivid image, striking fact. NEVER "Welcome" or "Here we are".
+2. STORY WITH FACTS (3-4 sentences): 3-4 CONCRETE historical facts from the context — dates, names, real events. "Telling a friend" tone, not encyclopedic.
+3. ANECDOTE OR CURIOSITY (1-2 sentences): something memorable, surprising or little-known — a legend, an architectural quirk, a human story. The thing travellers remember.
+4. CULTURAL SIGNIFICANCE (1-2 sentences): why this place matters today — what it stands for, what it symbolises, what it changed.
 5. INSIDER TIP (1 sentence): if there's a verified tip, present it as a secret: "Few people know that..." or "My tip: ...". If no reliable tip, skip this block.
-6. INVITING CLOSE (1 sentence): "Take a minute to...", "Before we move on, look at...", "Step closer and notice..."
+6. INVITING CLOSE (1-2 sentences): "Take a minute to...", "Before we move on, look at...", "Step closer and notice..."
 
-LENGTH: 220-300 words. Lively, passionate voice. Lonely Planet / in-person Civitatis style. ONLY the narration, no quotes, no titles, no dashes, no bullets. If the context data is sparse, stay concise but specific — don't pad with clichés.`
+LENGTH: 320-420 words. Lively, passionate voice. Lonely Planet / in-person Civitatis style. ONLY the narration, no quotes, no titles, no dashes, no bullets. If the context data is sparse, stay concise but specific — don't pad with clichés or invent facts.`
 
   try {
-    return await callAI(system, user, getAIKey(userKey), 900)
+    return await callAI(system, user, getAIKey(userKey), 1500)
   } catch (err) {
     console.error('AI audio script error:', err)
     return null
@@ -390,7 +473,7 @@ export async function generateAIPOIExplanation(
     lang === 'es'
       ? `Genera una explicación de audio sobre "${poiName}"${cityName ? ` en ${cityName}` : ''}.
 
-${description ? `Información de base verificada (extrae fechas, nombres, eventos):\n${description.slice(0, 1200)}` : ''}
+${description ? `INFORMACIÓN DE BASE VERIFICADA (extrae fechas, nombres, eventos concretos):\n${description.slice(0, 2500)}` : ''}
 
 ESTRUCTURA OBLIGATORIA (seis bloques cortos):
 0. CONFIRMACIÓN VISUAL (1-2 frases): "Mira la imagen en pantalla — ¿ves [descripción visual breve y reconocible]? Eso es ${poiName}."
@@ -400,10 +483,10 @@ ESTRUCTURA OBLIGATORIA (seis bloques cortos):
 4. INSIDER TIP (1 frase): consejo práctico verificable (mejor hora, entrada, secreto). Si no hay nada fiable, omite este bloque — NO inventes.
 5. CIERRE INVITANTE (1 frase): "Fíjate en...", "Antes de seguir, observa..."
 
-200-280 palabras. Voz cálida, apasionada, español de España, tuteo. Estilo Lonely Planet / Civitatis. SOLO la narración, sin comillas, sin títulos, sin viñetas.`
+300-380 palabras. Voz cálida, apasionada, español de España, tuteo. Estilo Lonely Planet / Civitatis. SOLO la narración, sin comillas, sin títulos, sin viñetas.`
       : `Generate an audio explanation about "${poiName}"${cityName ? ` in ${cityName}` : ''}.
 
-${description ? `Verified background info (extract dates, names, events):\n${description.slice(0, 1200)}` : ''}
+${description ? `VERIFIED BACKGROUND INFO (extract concrete dates, names, events):\n${description.slice(0, 2500)}` : ''}
 
 REQUIRED STRUCTURE (six short blocks):
 0. VISUAL CONFIRMATION (1-2 sentences): "Look at the image on screen — do you see [brief recognisable visual description]? That's ${poiName}."
@@ -413,10 +496,10 @@ REQUIRED STRUCTURE (six short blocks):
 4. INSIDER TIP (1 sentence): verifiable practical tip (best time, entry, secret). If nothing reliable, skip this block — do NOT invent.
 5. INVITING CLOSE (1 sentence): "Look at...", "Before moving on, notice..."
 
-200-280 words. Warm, passionate voice. Lonely Planet / Civitatis style. ONLY the narration, no quotes, no titles, no bullets.`
+300-380 words. Warm, passionate voice. Lonely Planet / Civitatis style. ONLY the narration, no quotes, no titles, no bullets.`
 
   try {
-    return await callAI(system, user, getAIKey(userKey), 900)
+    return await callAI(system, user, getAIKey(userKey), 1500)
   } catch (err) {
     console.error('AI POI explanation error:', err)
     return null
