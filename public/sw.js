@@ -1,7 +1,9 @@
 // GuiAgo Service Worker
-const CACHE_NAME = 'guiago-v3'
+// Bump CACHE_NAME / API_CACHE whenever app code changes so old clients
+// auto-evict their cached HTML/JS on the next visit.
+const CACHE_NAME = 'guiago-v4'
 const TILE_CACHE = 'osm-tiles-v1'
-const API_CACHE = 'api-v3'
+const API_CACHE = 'api-v4'
 
 const STATIC_ASSETS = [
   '/guiago/',

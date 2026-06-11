@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
 import { IOSInstallHint } from '../components/IOSInstallHint'
+import { UpdateChecker } from '../components/UpdateChecker'
 import { useAppStore } from '../stores/appStore'
 import { getNearbyCities, getFlagEmoji, getCityDetails } from '../services/nominatim'
 import { hasAIKey } from '../services/ai'
@@ -149,6 +150,9 @@ export function HomePage() {
             <p className="text-stone-500 text-sm mt-1">
               {language === 'es' ? 'Tu guía turístico inteligente' : 'Your intelligent tourist guide'}
             </p>
+            <div className="mt-1">
+              <UpdateChecker compact />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button

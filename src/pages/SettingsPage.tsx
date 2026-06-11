@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
+import { UpdateChecker } from '../components/UpdateChecker'
 import { validateApiKey, hasBuiltInKey, activeEngine } from '../services/ai'
 import {
   LOCAL_MODELS, type LocalModelId,
@@ -522,6 +523,11 @@ export function SettingsPage() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* ---- App Version + Update Check ---- */}
+        <section>
+          <UpdateChecker />
         </section>
 
         {/* ---- About Section ---- */}
