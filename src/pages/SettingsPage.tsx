@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
 import { UpdateChecker } from '../components/UpdateChecker'
+import { VoiceSettings } from '../components/VoiceSettings'
 import { validateApiKey, hasBuiltInKey, activeEngine } from '../services/ai'
 import {
   LOCAL_MODELS, type LocalModelId,
@@ -523,6 +524,14 @@ export function SettingsPage() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* ---- Guide Voice ---- */}
+        <section>
+          <h2 className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-2 px-1">
+            {es ? 'Voz del guía' : 'Guide voice'}
+          </h2>
+          <VoiceSettings />
         </section>
 
         {/* ---- App Version + Update Check ---- */}

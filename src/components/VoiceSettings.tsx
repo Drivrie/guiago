@@ -1,0 +1,148 @@
+import { useState } from 'react'
+import { useAppStore } from '../stores/appStore'
+import {
+  getProvider, setProvider,
+  getOpenAIKey, setOpenAIKey,
+  getVoice, setVoice,
+  STREAMELEMENTS_VOICES, OPENAI_VOICES,
+  synthesize,
+  type NeuralProviderId,
+} from '../services/neuralTTS'
+import * as audioPlayback from '../services/audioPlayback'
+
+export function VoiceSettings() {
+  const { language } = useAppStore()
+  const es = language === 'es'
+  const lang = es ? 'es' : 'en'
+
+  const [provider, setLocalProvider] = useState<NeuralProviderId>(getProvider)
+  const [voice, setLocalVoice] = useState(() => getVoice(lang))
+  const [openaiKey, setOpenaiKeyLocal] = useState(() => getOpenAIKey())
+  const [showKey, setShowKey] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+
+  function applyProvider(p: NeuralProviderId) {
+    setProvider(p)
+    setLocalProvider(p)
+    // Reset voice to default for the new provider
+    const next = p === 'openai' ? 'nova' : (lang === 'es' ? 'Lupe' : 'Brian')
+    setVoice(lang, next)
+    setLocalVoice(next)
+  }
+
+  function applyVoice(v: string) {
+    setVoice(lang, v)
+    setLocalVoice(v)
+  }
+
+  function applyKey() {
+    setOpenAIKey(openaiKey)
+  }
+
+  async function preview() {
+    setPreviewing(true)
+    audioPlayback.stop()
+    const sample = es
+      ? 'Hola, soy tu guía. Tienes delante uno de los lugares más fascinantes de la ciudad. Acompáñame.'
+      : 'Hi, I\'m your guide. You\'re standing in front of one of the most fascinating places in the city. Come with me.'
+    try {
+      const blobs = await synthesize(sample, lang, 'preview-sample')
+      if (blobs) {
+        audioPlayback.play(blobs, { rate: 1.0, onEnd: () => setPreviewing(false) })
+        return
+      }
+    } catch (err) { console.warn('[VoiceSettings] preview failed:', err) }
+    setPreviewing(false)
+  }
+
+  const voices = provider === 'openai' ? OPENAI_VOICES[lang] : STREAMELEMENTS_VOICES[lang]
+  const needsKey = provider === 'openai' && !getOpenAIKey()
+
+  return (
+    <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100 space-y-4">
+      <div>
+        <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
+          {es ? 'Voz del guía' : 'Guide voice'}
+        </p>
+        <p className="text-xs text-stone-500 mb-3">
+          {es
+            ? 'Una voz neuronal suena como un guía humano y NO se corta cuando bloqueas la pantalla (a diferencia de Siri).'
+            : "A neural voice sounds like a human guide and DOESN'T cut off when you lock the screen (unlike Siri)."}
+        </p>
+
+        <div className="grid grid-cols-1 gap-2">
+          {([
+            { id: 'streamelements' as NeuralProviderId, name: es ? 'Neuronal gratis (recomendada)' : 'Neural free (recommended)', sub: es ? 'Sin cuenta, voces realistas, sobrevive a pantalla bloqueada' : 'No account, realistic voices, survives screen lock', badge: '✨' },
+            { id: 'openai' as NeuralProviderId, name: es ? 'OpenAI · Premium' : 'OpenAI · Premium', sub: es ? 'Calidad cinematográfica · Requiere clave propia' : 'Cinematic quality · Bring your own key', badge: '🎙️' },
+            { id: 'none' as NeuralProviderId, name: es ? 'Voz del sistema (Siri)' : 'System voice (Siri)', sub: es ? 'Sin red, pero se corta al bloquear el iPhone' : 'No network, but stops when you lock the iPhone', badge: '📱' },
+          ]).map(opt => (
+            <button
+              key={opt.id}
+              onClick={() => applyProvider(opt.id)}
+              className={`flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-all active:scale-[0.98] ${
+                provider === opt.id ? 'border-orange-500 bg-orange-50' : 'border-stone-200 bg-white'
+              }`}
+            >
+              <span className="text-xl">{opt.badge}</span>
+              <div className="flex-1 min-w-0">
+                <p className={`font-bold text-sm ${provider === opt.id ? 'text-orange-700' : 'text-stone-800'}`}>{opt.name}</p>
+                <p className="text-xs text-stone-500 mt-0.5">{opt.sub}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {provider === 'openai' && (
+        <div>
+          <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
+            {es ? 'Clave OpenAI' : 'OpenAI key'}
+          </p>
+          <div className="flex gap-2">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={openaiKey}
+              onChange={e => setOpenaiKeyLocal(e.target.value)}
+              onBlur={applyKey}
+              placeholder="sk-..."
+              className="flex-1 bg-stone-50 rounded-xl px-3 py-2 text-sm border border-stone-200 font-mono"
+            />
+            <button
+              onClick={() => setShowKey(s => !s)}
+              className="px-3 rounded-xl bg-stone-100 text-stone-600 text-xs"
+            >{showKey ? '🙈' : '👁️'}</button>
+          </div>
+          <p className="text-[11px] text-stone-400 mt-1">
+            {es
+              ? 'Coste estimado: ~$0.015 por POI (~300 palabras). Solo se usa para TTS, nunca se envía a otros servicios.'
+              : 'Estimated cost: ~$0.015 per POI (~300 words). Used only for TTS, never sent elsewhere.'}
+          </p>
+        </div>
+      )}
+
+      {provider !== 'none' && !needsKey && (
+        <div>
+          <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
+            {es ? 'Voz' : 'Voice'}
+          </p>
+          <select
+            value={voice}
+            onChange={e => applyVoice(e.target.value)}
+            className="w-full bg-stone-50 rounded-xl px-3 py-2 text-sm border border-stone-200"
+          >
+            {voices.map(v => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <button
+            onClick={preview}
+            disabled={previewing}
+            className="mt-3 w-full bg-orange-500 text-white font-bold py-2 rounded-xl active:scale-95 disabled:opacity-50"
+          >
+            {previewing ? (es ? 'Reproduciendo…' : 'Playing…') : (es ? '▶ Probar voz' : '▶ Preview voice')}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

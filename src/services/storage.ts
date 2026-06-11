@@ -2,13 +2,14 @@ import { openDB, type IDBPDatabase } from 'idb'
 import type { Route } from '../types'
 
 const DB_NAME = 'guiago-db'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 const STORES = {
   ROUTES: 'routes',
   AUDIO_SCRIPTS: 'audio_scripts',
   POI_DESCRIPTIONS: 'poi_descriptions',
-  CITY_DATA: 'city_data'
+  CITY_DATA: 'city_data',
+  AUDIO_BLOBS: 'audio_blobs',
 } as const
 
 type GuiAgoDBSchema = {
@@ -27,6 +28,10 @@ type GuiAgoDBSchema = {
   city_data: {
     key: string
     value: { id: string; data: unknown; updatedAt: string }
+  }
+  audio_blobs: {
+    key: string
+    value: { id: string; blob: Blob; provider: string; createdAt: string }
   }
 }
 
@@ -55,6 +60,13 @@ async function getDB(): Promise<IDBPDatabase<GuiAgoDBSchema>> {
       // City data store
       if (!db.objectStoreNames.contains(STORES.CITY_DATA)) {
         db.createObjectStore(STORES.CITY_DATA, { keyPath: 'id' })
+      }
+
+      // Audio blobs store — pre-rendered MP3s for the neural TTS providers.
+      // Keyed by (poiId + lang + chunkIndex + providerId) so different voices
+      // coexist and replays cost zero network.
+      if (!db.objectStoreNames.contains(STORES.AUDIO_BLOBS)) {
+        db.createObjectStore(STORES.AUDIO_BLOBS, { keyPath: 'id' })
       }
     }
   })
@@ -175,8 +187,21 @@ export async function clearAllData(): Promise<void> {
     db.clear(STORES.ROUTES),
     db.clear(STORES.AUDIO_SCRIPTS),
     db.clear(STORES.POI_DESCRIPTIONS),
-    db.clear(STORES.CITY_DATA)
+    db.clear(STORES.CITY_DATA),
+    db.clear(STORES.AUDIO_BLOBS),
   ])
+}
+
+// Audio blobs (pre-rendered TTS MP3s)
+export async function saveAudioBlob(id: string, blob: Blob, provider: string): Promise<void> {
+  const db = await getDB()
+  await db.put(STORES.AUDIO_BLOBS, { id, blob, provider, createdAt: new Date().toISOString() })
+}
+
+export async function getAudioBlob(id: string): Promise<Blob | null> {
+  const db = await getDB()
+  const item = await db.get(STORES.AUDIO_BLOBS, id)
+  return item?.blob ?? null
 }
 
 export function estimateRouteStorage(poisCount: number): number {

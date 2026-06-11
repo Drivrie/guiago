@@ -360,7 +360,9 @@ export function RouteSetupPage() {
       }
 
       setRoute(route)
-      navigate('/route/active')
+      // Always show the preview screen so the visitor can review photos,
+      // remove stops they don't fancy, reorder, and start with confidence.
+      navigate('/route/preview')
     } catch (err) {
       setError(language === 'es'
         ? 'Error al generar la ruta. Comprueba tu conexión.'

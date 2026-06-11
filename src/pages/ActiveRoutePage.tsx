@@ -173,11 +173,30 @@ export function ActiveRoutePage() {
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [phase, currentNavStep, voiceMuted, language])
 
-  // ---- GPS arrival detection (30m auto-arrive) ----
+  // ---- GPS geofencing: proximity alert (100m) + auto-arrival (30m) ----
+  //
+  // Two thresholds so the visitor knows the POI is right around the corner
+  // before the guide actually starts narrating. Each alert fires exactly
+  // ONCE per POI (a ref-based guard prevents the announcement from looping
+  // while we're still within the radius).
+  const proximityAnnouncedFor = useRef<string | null>(null)
   useEffect(() => {
     if (phase !== 'navigating' || !userLocation || !currentPOI) return
     const dist = calculateDistance(userLocation[0], userLocation[1], currentPOI.lat, currentPOI.lon)
     setDistanceToPOI(Math.round(dist))
+
+    // Proximity announcement at ~100 m — gives the visitor time to look up
+    // and orient themselves before arrival kicks in.
+    if (dist < 100 && dist >= 30 && proximityAnnouncedFor.current !== currentPOI.id && !voiceMuted) {
+      proximityAnnouncedFor.current = currentPOI.id
+      const msg = language === 'es'
+        ? `Estás muy cerca de ${currentPOI.name}. Levanta la vista, lo tienes a unos ${Math.round(dist)} metros.`
+        : `You're very close to ${currentPOI.name}. Look up — it's about ${Math.round(dist)} metres away.`
+      speak(msg, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.0 })
+    }
+
+    // Auto-arrival at 30 m — switches phase to at_poi which triggers the
+    // narration auto-play in the audio-loading effect.
     if (dist < 30) {
       setInPreRoute(false)
       setPreRouteSegment(null)
@@ -1348,6 +1367,7 @@ export function ActiveRoutePage() {
             <AudioPlayer
               text={audioScript}
               poiName={currentPOI?.name || ''}
+              poi={currentPOI}
               autoPlay={phase === 'at_poi'}
               onPlayEnd={() => setPhase('post_poi')}
             />

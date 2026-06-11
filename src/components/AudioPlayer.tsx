@@ -1,21 +1,29 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { speak, stop, pause, resume, isSpeaking, setRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
+import { speak, stop as stopTTS, pause as pauseTTS, resume as resumeTTS, isSpeaking, setRate as setTTSRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
 import { startKeepAlive, stopKeepAlive } from '../services/backgroundKeepAlive'
+import * as neuralPlayer from '../services/audioPlayback'
+import { synthesize, isNeuralActive, getProviderLabel } from '../services/neuralTTS'
 import { useAppStore } from '../stores/appStore'
+import type { POI } from '../types'
 
 interface AudioPlayerProps {
   text: string
   poiName: string
+  /** When provided, neural-path metadata uses the full POI (image, category)
+   *  so iOS lock-screen / Control Centre shows the right poster + title. */
+  poi?: POI
   autoPlay?: boolean
   onPlayStart?: () => void
   onPlayEnd?: () => void
 }
 
-export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPlayEnd }: AudioPlayerProps) {
+export function AudioPlayer({ text, poiName, poi, autoPlay = false, onPlayStart, onPlayEnd }: AudioPlayerProps) {
   const { language, audioRate, setAudioRate, setAudioPlaying } = useAppStore()
   const [playing, setPlaying] = useState(false)
   const [paused, setPaused] = useState(false)
-  const [supported] = useState(() => 'speechSynthesis' in window)
+  const [supported] = useState(() => 'speechSynthesis' in window || true) // neural path also exists
+  const [buffering, setBuffering] = useState(false)
+  const [providerLabel, setProviderLabel] = useState(() => getProviderLabel())
   const hasAutoPlayed = useRef(false)
   // Stable waveform bar heights — only regenerated when text changes to prevent flicker
   const waveHeights = useMemo(
@@ -23,89 +31,58 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
     [text]
   )
 
+  // Decide audio path: neural (MP3 + <audio>) survives iOS lock screen and
+  // sounds like a real human. Web Speech is the offline fallback.
+  const neuralPath = isNeuralActive()
+
   useEffect(() => {
     return () => {
-      stop()
+      neuralPlayer.stop()
+      stopTTS()
       stopKeepAlive().catch(() => {})
-      // Clear MediaSession on unmount
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = null
-      }
     }
   }, [])
 
-  // ---- Resume speech synthesis automatically when the user returns to the page.
-  //      Browsers may auto-pause TTS when the document becomes hidden; this makes
-  //      sure narration continues without needing a manual press of "Play". ----
-  useEffect(() => {
-    function onVisibility() {
-      if (document.visibilityState === 'visible' && playing) {
-        // speechSynthesis state on resume is unreliable across browsers — explicitly resume
-        try { window.speechSynthesis.resume() } catch { /* ignore */ }
-      }
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => document.removeEventListener('visibilitychange', onVisibility)
-  }, [playing])
-
-  // MediaSession API — lock screen controls on iOS/Android
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: poiName,
-      artist: language === 'es' ? 'GuiAgo · Guía turístico' : 'GuiAgo · Tour guide',
-      album: language === 'es' ? 'Guía de audio' : 'Audio guide',
-    })
-    navigator.mediaSession.setActionHandler('play', () => handlePlay())
-    navigator.mediaSession.setActionHandler('pause', () => handlePause())
-    navigator.mediaSession.setActionHandler('stop', () => handleStop())
-  }, [poiName, language, text])
-
   // Stop when text changes, reset auto-play flag
   useEffect(() => {
-    stop()
+    neuralPlayer.stop()
+    stopTTS()
     setPlaying(false)
     setPaused(false)
+    setBuffering(false)
     hasAutoPlayed.current = false
+    setProviderLabel(getProviderLabel())
   }, [text])
 
-  // Auto-play when text is ready and autoPlay is true
-  useEffect(() => {
-    if (!autoPlay || !text || !supported || hasAutoPlayed.current) return
-    hasAutoPlayed.current = true
-    // Best-effort keep-alive on autoplay; silent audio may need a user gesture
-    // on iOS, but the wake lock + visibility handler will still kick in.
-    startKeepAlive().catch(() => {})
-    // Small delay to let voices load on iOS
-    const timer = setTimeout(() => {
-      setRate(audioRate)
-      const prepared = prepareTextForSpeech(text, language)
-      speak(prepared, language === 'es' ? 'es-ES' : 'en-US', {
-        onStart: () => { setPlaying(true); setPaused(false); setAudioPlaying(true); onPlayStart?.() },
-        onEnd: () => { setPlaying(false); setPaused(false); setAudioPlaying(false); onPlayEnd?.() }
+  async function playNeural() {
+    if (!poi && !poiName) return
+    setBuffering(true)
+    onPlayStart?.()
+    try {
+      const blobs = await synthesize(text, language === 'es' ? 'es' : 'en', poi?.id || poiName)
+      setBuffering(false)
+      if (!blobs) {
+        // Neural failed — fall back to Web Speech for this play.
+        playWebSpeech()
+        return
+      }
+      setPlaying(true); setPaused(false); setAudioPlaying(true)
+      neuralPlayer.play(blobs, {
+        rate: audioRate,
+        poi,
+        onEnd: () => {
+          setPlaying(false); setPaused(false); setAudioPlaying(false); onPlayEnd?.()
+        },
       })
-    }, 900)
-    return () => clearTimeout(timer)
-  }, [text, autoPlay, supported])
-
-  function handlePlay() {
-    if (!supported) return
-
-    // Start the keep-alive loop synchronously inside the user gesture so the
-    // silent audio element is permitted to play on iOS / Safari. This keeps
-    // the page foregrounded for media purposes — TTS continues with the
-    // screen off or the user looking at another app.
-    startKeepAlive().catch(() => {})
-
-    if (paused) {
-      resume()
-      setPlaying(true)
-      setPaused(false)
-      return
+    } catch (err) {
+      console.warn('[AudioPlayer] neural failed:', err)
+      setBuffering(false)
+      playWebSpeech()
     }
+  }
 
-    hasAutoPlayed.current = true // prevent double auto-play if user manually presses play
-    setRate(audioRate)
+  function playWebSpeech() {
+    setTTSRate(audioRate)
     const prepared = prepareTextForSpeech(text, language)
     speak(prepared, language === 'es' ? 'es-ES' : 'en-US', {
       onStart: () => { setPlaying(true); setPaused(false); setAudioPlaying(true); onPlayStart?.() },
@@ -113,25 +90,60 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
     })
   }
 
+  // Auto-play when text is ready and autoPlay is true
+  useEffect(() => {
+    if (!autoPlay || !text || hasAutoPlayed.current) return
+    hasAutoPlayed.current = true
+    // Keep-alive (wake lock + silent audio) so navigation survives the lock
+    // screen even on the non-neural path.
+    startKeepAlive().catch(() => {})
+    const timer = setTimeout(() => {
+      if (neuralPath) playNeural()
+      else playWebSpeech()
+    }, neuralPath ? 100 : 900)
+    return () => clearTimeout(timer)
+  }, [text, autoPlay])
+
+  function handlePlay() {
+    // Start keep-alive synchronously inside the user gesture (iOS audio
+    // policies require it for the silent-audio loop).
+    startKeepAlive().catch(() => {})
+
+    if (paused) {
+      if (neuralPath) neuralPlayer.resume()
+      else resumeTTS()
+      setPlaying(true); setPaused(false)
+      return
+    }
+    hasAutoPlayed.current = true
+    if (neuralPath) playNeural()
+    else playWebSpeech()
+  }
+
   function handlePause() {
+    if (neuralPath && neuralPlayer.isPlaying()) {
+      neuralPlayer.pause()
+      setPlaying(false); setPaused(true)
+      return
+    }
     if (isSpeaking()) {
-      pause()
-      setPlaying(false)
-      setPaused(true)
+      pauseTTS()
+      setPlaying(false); setPaused(true)
     }
   }
 
   function handleStop() {
-    stop()
-    setPlaying(false)
-    setPaused(false)
-    setAudioPlaying(false)
+    neuralPlayer.stop()
+    stopTTS()
+    setPlaying(false); setPaused(false); setAudioPlaying(false)
   }
 
   function handleRateChange(rate: number) {
     setAudioRate(rate)
-    setRate(rate)
-    if (playing) {
+    if (neuralPath) neuralPlayer.setRate(rate)
+    else setTTSRate(rate)
+    if (playing && !neuralPath) {
+      // Web Speech can't change rate mid-utterance — restart.
       handleStop()
       setTimeout(() => handlePlay(), 100)
     }
@@ -155,13 +167,11 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-stone-800 text-sm truncate">{poiName}</p>
-          <p className="text-xs text-stone-400">
-            {language === 'es' ? 'Guía de audio' : 'Audio guide'}
-          </p>
+          <p className="text-[11px] text-stone-400 truncate">{providerLabel}</p>
         </div>
       </div>
 
-      {/* Waveform animation when playing */}
+      {/* Waveform / buffering indicator */}
       {playing && (
         <div className="flex items-center gap-0.5 mb-3 h-6">
           {waveHeights.map((h, i) => (
@@ -176,6 +186,11 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
             />
           ))}
         </div>
+      )}
+      {buffering && !playing && (
+        <p className="text-xs text-orange-600 mb-3">
+          {language === 'es' ? 'Generando voz neuronal…' : 'Synthesising neural voice…'}
+        </p>
       )}
 
       {/* Controls */}
@@ -192,7 +207,8 @@ export function AudioPlayer({ text, poiName, autoPlay = false, onPlayStart, onPl
 
         <button
           onClick={playing ? handlePause : handlePlay}
-          className="flex-1 h-12 rounded-xl bg-orange-500 text-white flex items-center justify-center gap-2 shadow-md shadow-orange-200 active:scale-95 transition-transform font-semibold"
+          disabled={buffering}
+          className="flex-1 h-12 rounded-xl bg-orange-500 text-white flex items-center justify-center gap-2 shadow-md shadow-orange-200 active:scale-95 transition-transform font-semibold disabled:opacity-60"
         >
           {playing ? (
             <>

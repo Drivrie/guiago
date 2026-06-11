@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { HomePage } from './pages/HomePage'
 import { RouteSetupPage } from './pages/RouteSetupPage'
+import { RoutePreviewPage } from './pages/RoutePreviewPage'
 import { ActiveRoutePage } from './pages/ActiveRoutePage'
 import { POIDetailPage } from './pages/POIDetailPage'
 import { OfflineRoutesPage } from './pages/OfflineRoutesPage'
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="/today" element={<TodayPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/city/:cityName" element={<RouteSetupPage />} />
+        <Route path="/route/preview" element={<RoutePreviewPage />} />
         <Route path="/route/active" element={<ActiveRoutePage />} />
         <Route path="/poi/:poiId" element={<POIDetailPage />} />
         <Route path="/offline" element={<OfflineRoutesPage />} />
