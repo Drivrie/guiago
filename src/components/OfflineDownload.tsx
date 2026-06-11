@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Route } from '../types'
 import { saveRoute, saveAudioScript, savePOIDescription, getStorageEstimate, estimateRouteStorage } from '../services/storage'
 import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
+import { synthesize, isNeuralActive } from '../services/neuralTTS'
 import { useAppStore } from '../stores/appStore'
 import { Button } from './ui/Button'
 
@@ -45,6 +46,12 @@ export function OfflineDownload({ route, onComplete }: OfflineDownloadProps) {
           await savePOIDescription(poi.id, desc, language)
           const audioScript = generateAudioScript({ name: poi.name, category: poi.category, description: desc }, language)
           await saveAudioScript(poi.id, audioScript, language)
+          // Pre-render the neural MP3s too (synthesize caches each chunk in
+          // IndexedDB) so the downloaded route speaks with the SAME premium
+          // voice offline — not just the on-device Siri fallback.
+          if (isNeuralActive()) {
+            await synthesize(audioScript, language, poi.id).catch(() => { /* best effort */ })
+          }
         }
         completed++
         setProgress(Math.round((completed / total) * 100))

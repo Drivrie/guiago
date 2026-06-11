@@ -11,6 +11,7 @@ import { buildNarration, prefetchNarration } from '../services/narration'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
 import { speak, stop as stopTTS } from '../services/tts'
 import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services/backgroundKeepAlive'
+import { unlock as unlockAudio } from '../services/audioPlayback'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
@@ -324,6 +325,10 @@ export function ActiveRoutePage() {
   // ---- Reorder POIs + rebuild segments from a start coordinate ----
   async function reorderAndStart(startLat: number, startLon: number) {
     if (!currentRoute) return
+    // Synchronous (still inside the tap gesture): unlock the narration
+    // audio element so the auto-played neural narration at the first POI
+    // is allowed by iOS even though it starts after async fetches.
+    unlockAudio()
     setRebuilding(true)
     const orderedPOIs = orderPOIsOptimally([...pois], startLat, startLon)
 
@@ -394,6 +399,7 @@ export function ActiveRoutePage() {
   // in-app turn-by-turn guiding is performed. ----
   function enterExternalMode() {
     if (!currentRoute) return
+    unlockAudio() // gesture-bound iOS audio unlock for later narrations
     setNavMode('external')
     const start = userLocation
       ? { lat: userLocation[0], lon: userLocation[1] }

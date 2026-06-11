@@ -211,6 +211,12 @@ export function RoutePreviewPage() {
             {es ? 'Mínimo 3 paradas para que la ruta tenga sentido.' : 'A minimum of 3 stops keeps the route useful.'}
           </p>
         )}
+
+        <p className="text-center text-[11px] text-stone-400 mt-1 px-4">
+          {es
+            ? 'Al iniciar el guiado a pie, el orden se ajustará automáticamente desde tu punto de salida real. Las paradas que quites no volverán.'
+            : 'When you start walking guidance, the order auto-adjusts from your actual start point. Removed stops stay removed.'}
+        </p>
       </div>
 
       {/* Start button (fixed bottom) */}

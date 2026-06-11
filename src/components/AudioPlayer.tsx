@@ -21,7 +21,6 @@ export function AudioPlayer({ text, poiName, poi, autoPlay = false, onPlayStart,
   const { language, audioRate, setAudioRate, setAudioPlaying } = useAppStore()
   const [playing, setPlaying] = useState(false)
   const [paused, setPaused] = useState(false)
-  const [supported] = useState(() => 'speechSynthesis' in window || true) // neural path also exists
   const [buffering, setBuffering] = useState(false)
   const [providerLabel, setProviderLabel] = useState(() => getProviderLabel())
   const hasAutoPlayed = useRef(false)
@@ -105,9 +104,11 @@ export function AudioPlayer({ text, poiName, poi, autoPlay = false, onPlayStart,
   }, [text, autoPlay])
 
   function handlePlay() {
-    // Start keep-alive synchronously inside the user gesture (iOS audio
-    // policies require it for the silent-audio loop).
+    // Start keep-alive + unlock the narration <audio> element synchronously
+    // inside the user gesture — iOS only allows later (post-fetch) play()
+    // calls on elements that have already played within a gesture.
     startKeepAlive().catch(() => {})
+    neuralPlayer.unlock()
 
     if (paused) {
       if (neuralPath) neuralPlayer.resume()
@@ -147,16 +148,6 @@ export function AudioPlayer({ text, poiName, poi, autoPlay = false, onPlayStart,
       handleStop()
       setTimeout(() => handlePlay(), 100)
     }
-  }
-
-  if (!supported) {
-    return (
-      <div className="bg-amber-50 rounded-2xl p-4 text-center">
-        <p className="text-amber-700 text-sm">
-          {language === 'es' ? 'Audio no disponible en este navegador' : 'Audio not available in this browser'}
-        </p>
-      </div>
-    )
   }
 
   return (

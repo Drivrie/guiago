@@ -39,8 +39,9 @@ function ensureAudio(): HTMLAudioElement {
     if (queueIdx < queue.length) {
       playCurrent()
     } else {
+      const cb = onEndCb
       cleanup()
-      onEndCb?.()
+      cb?.()
     }
   })
 
@@ -48,7 +49,11 @@ function ensureAudio(): HTMLAudioElement {
     console.warn('[audioPlayback] element error:', e)
     queueIdx++
     if (queueIdx < queue.length) playCurrent()
-    else { cleanup(); onEndCb?.() }
+    else {
+      const cb = onEndCb
+      cleanup()
+      cb?.()
+    }
   })
 
   return audio
@@ -72,6 +77,7 @@ function playCurrent(): void {
 
 function cleanup(): void {
   playing = false
+  onEndCb = null
   // Revoke object URLs to free memory.
   for (const u of currentUrls) URL.revokeObjectURL(u)
   currentUrls = []
@@ -107,6 +113,33 @@ function setMediaSessionMetadata(poi: POI): void {
   } catch (err) {
     console.warn('[audioPlayback] metadata failed:', err)
   }
+}
+
+// 1-second silent WAV (RIFF/44.1kHz/mono/16-bit, zero samples) as data URI.
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
+
+let unlocked = false
+
+/**
+ * iOS unlock — MUST be called synchronously inside a user gesture (tap).
+ *
+ * iOS only allows audio.play() on an element that has previously played
+ * within a user gesture. Our real narration starts AFTER an async fetch
+ * (outside the gesture), so we "prime" the shared element here with a
+ * silent WAV. Once unlocked, the same element can play queued narration
+ * chunks for the rest of the session without further gestures — exactly
+ * how music apps chain tracks.
+ */
+export function unlock(): void {
+  if (unlocked) return
+  const a = ensureAudio()
+  a.src = SILENT_WAV
+  a.play().then(() => {
+    unlocked = true
+    a.pause()
+    a.removeAttribute('src')
+  }).catch(() => { /* will retry on the next gesture */ })
 }
 
 export interface PlayOptions {
