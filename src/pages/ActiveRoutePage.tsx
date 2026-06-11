@@ -178,14 +178,26 @@ export function ActiveRoutePage() {
         const insiderTip = currentPOI!.tags?.['insiderTip'] || undefined
         const reason = currentPOI!.shortDescription || ''
         const aiScript = await generateAIAudioScript(
-          currentPOI!.name, currentPOI!.category, desc || '', reason, insiderTip, language, getAIKey(anthropicApiKey)
+          currentPOI!.name,
+          currentPOI!.category,
+          desc || '',
+          reason,
+          insiderTip,
+          language,
+          getAIKey(anthropicApiKey),
+          currentPOI!.routeType, // per-type narration style
         )
         if (aiScript) { setAudioScript(aiScript); setAudioLoading(false); return }
       }
 
       // 4. Fallback to template-based script
       setAudioScript(generateAudioScript(
-        { name: currentPOI!.name, category: currentPOI!.category, description: desc || undefined },
+        {
+          name: currentPOI!.name,
+          category: currentPOI!.category,
+          description: desc || undefined,
+          insiderTip: currentPOI!.tags?.['insiderTip'] || undefined,
+        },
         language
       ))
       setAudioLoading(false)

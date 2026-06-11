@@ -110,7 +110,7 @@ async function fetchPOIFromMediaWiki(
       titles: name,
       prop: 'extracts|pageimages',
       exintro: 'true',
-      exchars: '1500',
+      exchars: '6000',
       pithumbsize: '600',
       format: 'json',
       origin: '*'
@@ -173,10 +173,21 @@ async function fetchPOIFromMediaWiki(
 
 export async function getPOIDescription(name: string, lang: Language = 'es'): Promise<string> {
   try {
-    const result = await getPOIInfo(name, lang)
-    if (result?.extract) {
-      return result.extract
+    // Merge Wikipedia + Wikivoyage so the narration prompt receives BOTH
+    // encyclopedic context (history, dates, names) and travel-guide flavour
+    // (what to see, when to go, anecdotes) — Civitatis-quality input.
+    const [wikiRes, voyageRes] = await Promise.allSettled([
+      fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
+      fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
+    ])
+    const wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
+    const voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
+    const parts: string[] = []
+    if (wiki?.extract) parts.push(wiki.extract)
+    if (voyage?.extract && (!wiki?.extract || !wiki.extract.includes(voyage.extract.slice(0, 40)))) {
+      parts.push(voyage.extract)
     }
+    if (parts.length > 0) return parts.join(' ').trim()
     return generateFallbackDescription(name, lang)
   } catch (error) {
     console.error('Error getting POI description:', error)
@@ -245,19 +256,10 @@ export async function getPOIInfoMultiSource(
   let wiki = wikiRes.status === 'fulfilled' ? wikiRes.value : null
   let voyage = voyageRes.status === 'fulfilled' ? voyageRes.value : null
 
-  // 3. If we still have nothing relevant and a city was given, retry with bare name as fallback
-  if ((!wiki || !articleMatchesCity(wiki, context)) &&
-      (!voyage || !articleMatchesCity(voyage, context)) &&
-      context?.cityName && scopedQuery !== name) {
-    const [bareWiki, bareVoyage] = await Promise.allSettled([
-      fetchPOIFromMediaWiki(name, lang, WIKI_API[lang], `https://${lang}.wikipedia.org`),
-      fetchPOIFromMediaWiki(name, lang, WIKIVOYAGE_API[lang], `https://${lang}.wikivoyage.org`),
-    ])
-    if (!wiki) wiki = bareWiki.status === 'fulfilled' ? bareWiki.value : null
-    if (!voyage) voyage = bareVoyage.status === 'fulfilled' ? bareVoyage.value : null
-  }
-
-  // 4. If a city context exists, reject results that clearly belong elsewhere
+  // 3. If a city context exists, reject results that clearly belong elsewhere.
+  //    We deliberately do NOT retry with a bare name here: a bare-name fallback
+  //    is what causes "Catedral" in Burgos to return Sevilla's cathedral when
+  //    the scoped search finds nothing. Better to return null than to lie.
   if (context?.cityName) {
     if (wiki && !articleMatchesCity(wiki, context)) wiki = null
     if (voyage && !articleMatchesCity(voyage, context)) voyage = null
@@ -279,13 +281,40 @@ export async function getPOIInfoMultiSource(
   }
 }
 
-/** Heuristic: does the article's extract mention the requested city / country? */
+/**
+ * Heuristic: does the article actually belong to the requested city?
+ *
+ * Requires the city name to appear as a discrete WORD in title or extract
+ * (not just as a substring). Country alone is NO LONGER enough — a famous
+ * "Catedral" article that mentions "Spain" would otherwise pass even when
+ * it's Sevilla's cathedral and the user is in Burgos.
+ */
 function articleMatchesCity(article: WikiResult, context?: POILookupContext): boolean {
   if (!context?.cityName) return true
   const haystack = `${article.title} ${article.extract}`.toLowerCase()
-  if (haystack.includes(context.cityName.toLowerCase())) return true
-  if (context.country && haystack.includes(context.country.toLowerCase())) return true
-  return false
+  const city = context.cityName.toLowerCase().trim()
+  if (!city) return true
+  const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const cityWord = new RegExp(`(^|[^\\p{L}])${escaped}([^\\p{L}]|$)`, 'iu')
+  return cityWord.test(haystack)
+}
+
+/** Rough title-similarity for "Qué visitar hoy" ranking: how closely does
+ *  the article's title match the user's free-text query?  Returns 0..1. */
+function titleSimilarity(query: string, title: string): number {
+  const q = query.toLowerCase().trim()
+  const t = title.toLowerCase().trim()
+  if (!q || !t) return 0
+  if (t === q) return 1
+  if (t.includes(q)) return 0.9
+  if (q.includes(t)) return 0.7
+  // Word-overlap fraction (loose)
+  const qWords = new Set(q.split(/\s+/).filter(w => w.length > 2))
+  const tWords = new Set(t.split(/\s+/).filter(w => w.length > 2))
+  if (qWords.size === 0) return 0
+  let common = 0
+  for (const w of qWords) if (tWords.has(w)) common++
+  return common / qWords.size * 0.6
 }
 
 /**
@@ -335,6 +364,12 @@ async function searchPOIByGeo(
     }
     const pages = detailData.query?.pages || {}
 
+    // Rank candidate hits by a combined score: title similarity to the user
+    // query (so "Catedral de Burgos" beats a nearby unrelated article that
+    // happens to be a few metres closer) + inverse distance (so a hit 200 m
+    // away beats one 3 km away when titles are equally close).
+    type Candidate = { combined: number; page: { pageid?: number; title?: string; extract?: string; thumbnail?: { source?: string } } }
+    const candidates: Candidate[] = []
     for (const hit of hits) {
       const page = pages[String(hit.pageid)]
       if (!page || page.missing !== undefined) continue
@@ -342,6 +377,16 @@ async function searchPOIByGeo(
       if (!coords) continue
       const distM = haversineMeters(lat, lon, coords.lat, coords.lon)
       if (distM > radiusMeters) continue
+      const sim = titleSimilarity(name, page.title || '')
+      // Combined score: title similarity is the dominant signal (0..1 × 100),
+      // proximity adds a smaller secondary signal (inverse distance, capped).
+      const proximity = Math.max(0, 1 - distM / radiusMeters) // 0..1
+      const combined = sim * 100 + proximity * 20
+      candidates.push({ combined, page })
+    }
+    candidates.sort((a, b) => b.combined - a.combined)
+
+    for (const { page } of candidates) {
       const extract = cleanWikiExtract(page.extract || '')
       if (!extract) continue
       return {
@@ -438,7 +483,7 @@ function pickPhrase(arr: string[], name: string): string {
 }
 
 export function generateAudioScript(
-  poi: { name: string; category: string; description?: string },
+  poi: { name: string; category: string; description?: string; insiderTip?: string },
   lang: Language
 ): string {
   const desc = poi.description || ''
@@ -448,8 +493,11 @@ export function generateAudioScript(
     .map(s => s.trim())
     .filter(s => s.length > 30)
 
-  const mainContent = sentences.slice(0, 3).join(' ')
-  const extraContent = sentences.slice(3, 5).join(' ')
+  // Richer narration when AI is unavailable: 6 main sentences + 3 extras
+  // (was 3+2) so the template script feels closer to a real audio guide.
+  const mainContent = sentences.slice(0, 6).join(' ')
+  const extraContent = sentences.slice(6, 9).join(' ')
+  const tip = poi.insiderTip?.trim()
 
   if (lang === 'en') {
     // Always start by asking visitor to look at the image to confirm they're at the right place
@@ -476,6 +524,7 @@ export function generateAudioScript(
     let script = imageConfirm + pickPhrase(openings, poi.name) + ' '
     if (mainContent) script += mainContent + ' '
     if (extraContent) script += pickPhrase(connectors, poi.name + 'x') + ' ' + extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
+    if (tip) script += `Insider tip: ${tip} `
     script += pickPhrase(closings, poi.name + 'z')
     return script
   }
@@ -511,6 +560,7 @@ export function generateAudioScript(
     script += connector + ' '
     script += extraContent.charAt(0).toLowerCase() + extraContent.slice(1) + ' '
   }
+  if (tip) script += `Y un consejo de quien conoce este sitio: ${tip} `
   script += pickPhrase(closings, poi.name + 'z')
   return script
 }

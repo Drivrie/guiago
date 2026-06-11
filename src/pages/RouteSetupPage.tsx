@@ -10,20 +10,68 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally } from '../services/routing'
+import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, pruneOutlierPOIs, fitRouteToTimeBudget } from '../services/routing'
 import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
 import { ROUTE_TYPE_INFO } from '../types'
 
-// Fallback order when requested type yields no results
+// Theme-preserving fallback chain. CRITICAL: each type falls back to types
+// that share the SAME spirit, so a "gastronomía" route never degrades into
+// a "monumental" route (which is what made the app feel like all filters
+// returned the same POIs).
 const ROUTE_FALLBACKS: Record<RouteType, RouteType[]> = {
   imprescindibles: ['monumental', 'arquitectura', 'curiosidades'],
-  secretos_locales: ['curiosidades', 'historia_negra', 'monumental'],
-  monumental: ['arquitectura', 'curiosidades', 'imprescindibles'],
-  historia_negra: ['curiosidades', 'monumental', 'secretos_locales'],
-  curiosidades: ['monumental', 'secretos_locales', 'arquitectura'],
-  gastronomia: ['curiosidades', 'monumental', 'naturaleza'],
-  arquitectura: ['monumental', 'curiosidades', 'imprescindibles'],
-  naturaleza: ['curiosidades', 'monumental', 'gastronomia'],
+  secretos_locales: ['curiosidades', 'naturaleza', 'gastronomia'],
+  monumental: ['arquitectura', 'imprescindibles'],
+  historia_negra: ['curiosidades', 'secretos_locales'],
+  curiosidades: ['secretos_locales', 'arquitectura'],
+  gastronomia: ['naturaleza', 'curiosidades', 'secretos_locales'],
+  arquitectura: ['monumental', 'imprescindibles'],
+  naturaleza: ['secretos_locales', 'curiosidades'],
+}
+
+// Classifies route types by which DATA SOURCE works best for them:
+// - 'landmark': Wikipedia geosearch is the right source (iconic monuments).
+// - 'osm': OSM/Overpass is the right source (food places, parks, etc. — most
+//   of these are NOT on Wikipedia at all).
+// - 'narrative': AI curation is the right source (hidden gems, dark history,
+//   quirky curiosities — Wikipedia and OSM rarely tag these correctly).
+function routeCategory(routeType: RouteType): 'landmark' | 'osm' | 'narrative' {
+  switch (routeType) {
+    case 'imprescindibles':
+    case 'monumental':
+    case 'arquitectura':
+      return 'landmark'
+    case 'gastronomia':
+    case 'naturaleza':
+      return 'osm'
+    case 'secretos_locales':
+    case 'historia_negra':
+    case 'curiosidades':
+      return 'narrative'
+  }
+}
+
+// Hard off-theme category exclusions used as a final safety net after all
+// search paths. If a POI's category falls in the off-theme set for the
+// requested type, it's dropped — even if it scored well in Wikipedia/Overpass.
+const OFF_THEME_CATEGORIES: Record<RouteType, RegExp | null> = {
+  imprescindibles: null,
+  monumental: null,
+  arquitectura: null,
+  gastronomia: /catedral|cathedral|basílica|basilica|iglesia|church|sinagoga|synagogue|mezquita|mosque|convento|convent|monasterio|monastery|cementerio|cemetery|castillo|castle|palacio|palace|museo|museum/i,
+  historia_negra: /jardín|garden|parque|park|fuente|fountain|mercado|market|restaurante|restaurant|cafetería|cafe|bar/i,
+  curiosidades: null,
+  secretos_locales: null,
+  naturaleza: /catedral|cathedral|basílica|basilica|palacio|palace|castillo|castle|museo|museum|sinagoga|synagogue|mezquita|mosque|cementerio|cemetery|restaurante|restaurant|bar|cafetería|cafe/i,
+}
+
+function filterByThemeCategory(pois: POI[], routeType: RouteType): POI[] {
+  const off = OFF_THEME_CATEGORIES[routeType]
+  if (!off) return pois
+  return pois.filter(p => {
+    const hay = `${p.category} ${p.name}`.toLowerCase()
+    return !off.test(hay)
+  })
 }
 
 const POPULAR_SUGGESTIONS = [
@@ -83,10 +131,13 @@ export function RouteSetupPage() {
     setAiRouteStory(null)
     setUsingAI(false)
 
-    const maxPOIs = Math.max(3, Math.min(12, Math.floor(selectedDuration / 20)))
+    // Collect more candidates than needed so the time-budget fitter can pick
+    // the best subset that actually fits within the budget on foot.
+    const candidateTarget = Math.max(8, Math.min(20, Math.floor(selectedDuration / 12)))
     const visitedNames = avoidVisited ? getVisitedPOINames(selectedCity.id) : []
     const aiAvailable = hasAIKey(anthropicApiKey)
     const aiKey = getAIKey(anthropicApiKey)
+    const category = routeCategory(selectedRouteType)
 
     setLoading(true, language === 'es' ? 'Buscando lugares de interés...' : 'Finding points of interest...')
 
@@ -95,15 +146,17 @@ export function RouteSetupPage() {
       let usedRouteType = selectedRouteType
 
       // ============================================================
-      // AI-ENHANCED PATH: Mistral generates curated POI list
+      // STEP 1 — AI curation (mandatory for narrative types,
+      // augmentation for landmark/osm types).
       // ============================================================
+      const aiIsPrimary = category === 'narrative' || category === 'landmark'
       if (aiAvailable) {
         setLoading(true, language === 'es' ? '🤖 Creando ruta con IA...' : '🤖 Creating AI-powered route...')
         setUsingAI(true)
 
         const aiResult = await generateAIRoute(
           selectedCity.name,
-          selectedCity.country,        // pass country to prevent city-name ambiguity
+          selectedCity.country,
           selectedRouteType,
           selectedDuration,
           language,
@@ -113,16 +166,12 @@ export function RouteSetupPage() {
 
         if (aiResult && aiResult.suggestedPOIs.length > 0) {
           setAiRouteStory(aiResult.routeStory)
-
-          // Resolve each AI-suggested POI to real Wikipedia data + coordinates
           setLoading(true, language === 'es' ? '🔍 Verificando lugares en Wikipedia...' : '🔍 Verifying places on Wikipedia...')
 
           const resolvedPOIs: POI[] = []
           for (const aiPOI of aiResult.suggestedPOIs) {
             const wikiPOI = await searchPOIByName(aiPOI.name, selectedCity, selectedRouteType, language)
             if (wikiPOI) {
-              // Final safety check: reject any POI whose coordinates are clearly wrong city
-              // (searchPOIByName already does this, but double-check here as well)
               const distDeg = Math.sqrt(
                 Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
                 Math.pow(wikiPOI.lon - selectedCity.lon, 2)
@@ -133,88 +182,81 @@ export function RouteSetupPage() {
               }
               resolvedPOIs.push({
                 ...wikiPOI,
-                // Enhance with AI metadata
                 shortDescription: aiPOI.reason,
                 tags: { ...(wikiPOI.tags || {}), insiderTip: aiPOI.insiderTip || '' },
               })
             }
           }
 
-          if (resolvedPOIs.length >= 2) {
-            pois = resolvedPOIs
-          } else {
-            // AI suggestions not verifiable near this city, fall through to Wikipedia geosearch
-            setUsingAI(false)
-          }
+          if (resolvedPOIs.length > 0) pois = resolvedPOIs
+          if (resolvedPOIs.length < (aiIsPrimary ? 2 : 1)) setUsingAI(false)
         } else {
           setUsingAI(false)
         }
       }
 
       // ============================================================
-      // WIKIPEDIA GEOSEARCH PATH (fallback or no API key)
+      // STEP 2 — Source-specific supplement.
+      // OSM types (gastronomia, naturaleza): Overpass first, then Wikipedia.
+      // Landmark types (imprescindibles, monumental, arquitectura):
+      //   Wikipedia first, then Overpass.
+      // Narrative types (secretos, historia_negra, curiosidades): both as
+      //   supplement (AI is already primary).
+      // ============================================================
+      const existingNames = new Set(pois.map(p => p.name.toLowerCase()))
+      const supplementPushUnique = (extra: POI[]) => {
+        for (const p of extra) {
+          if (pois.length >= candidateTarget) break
+          if (existingNames.has(p.name.toLowerCase())) continue
+          if (visitedNames.some(v => v.toLowerCase() === p.name.toLowerCase())) continue
+          existingNames.add(p.name.toLowerCase())
+          pois.push(p)
+        }
+      }
+
+      if (pois.length < candidateTarget) {
+        if (category === 'osm') {
+          setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
+          supplementPushUnique(await getPOIsByCity(selectedCity, selectedRouteType, selectedDuration))
+          if (pois.length < candidateTarget) {
+            setLoading(true, language === 'es' ? 'Buscando en Wikipedia...' : 'Searching Wikipedia...')
+            supplementPushUnique(await searchPOIsWikipedia(selectedCity, selectedRouteType, candidateTarget, language, visitedNames))
+          }
+        } else {
+          setLoading(true, language === 'es' ? 'Buscando en Wikipedia...' : 'Searching Wikipedia...')
+          supplementPushUnique(await searchPOIsWikipedia(selectedCity, selectedRouteType, candidateTarget, language, visitedNames))
+          if (pois.length < candidateTarget) {
+            setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
+            supplementPushUnique(await getPOIsByCity(selectedCity, selectedRouteType, selectedDuration))
+          }
+        }
+      }
+
+      // ============================================================
+      // STEP 3 — Apply the theme-category safety filter so a famous
+      // off-theme POI never sneaks in via Overpass's broad heritage query.
+      // ============================================================
+      pois = filterByThemeCategory(pois, selectedRouteType)
+
+      // ============================================================
+      // STEP 4 — Theme-preserving fallback when truly empty.
       // ============================================================
       if (pois.length < 2) {
-        async function searchForType(rType: RouteType): Promise<POI[]> {
-          setLoading(true, language === 'es' ? `Buscando en Wikipedia...` : 'Searching Wikipedia...')
-          let results = await searchPOIsWikipedia(selectedCity!, rType, maxPOIs, language, visitedNames)
-          if (results.length < maxPOIs) {
-            setLoading(true, language === 'es' ? 'Buscando en OpenStreetMap...' : 'Searching OpenStreetMap...')
-            const overpassPOIs = await getPOIsByCity(selectedCity!, rType, selectedDuration!)
-            const existingNames = new Set(results.map(p => p.name.toLowerCase()))
-            for (const op of overpassPOIs) {
-              if (!existingNames.has(op.name.toLowerCase()) &&
-                  !visitedNames.some(v => v.toLowerCase() === op.name.toLowerCase())) {
-                results.push(op)
-                existingNames.add(op.name.toLowerCase())
-              }
-            }
-          }
-          return results
-        }
-
-        let found = await searchForType(selectedRouteType)
-
-        // Try fallback types ONLY when we have fewer than 2 POIs of the requested type.
-        // The previous threshold of 3 caused valid 2-stop routes in small cities to be
-        // wrongly replaced by an unrelated alternative type.
-        if (found.length < 2) {
-          for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
-            const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
-            setLoading(true, language === 'es'
-              ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
-              : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
-            const fbPOIs = await searchForType(fbType)
-            if (fbPOIs.length >= 2) {
-              found = fbPOIs
-              usedRouteType = fbType
-              setFallbackInfo({ requested: selectedRouteType, found: fbType })
-              break
-            }
+        for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
+          const fbRouteInfo = ROUTE_TYPE_INFO.find(r => r.id === fbType)
+          setLoading(true, language === 'es'
+            ? `Buscando alternativas: "${fbRouteInfo?.labelEs || fbType}"...`
+            : `Searching alternatives: "${fbRouteInfo?.labelEn || fbType}"...`)
+          const fbWiki = await searchPOIsWikipedia(selectedCity, fbType, candidateTarget, language, visitedNames)
+          const fbOverpass = await getPOIsByCity(selectedCity, fbType, selectedDuration)
+          const fbAll = filterByThemeCategory([...fbWiki, ...fbOverpass], fbType)
+          if (fbAll.length >= 2) {
+            pois = fbAll
+            usedRouteType = fbType
+            setFallbackInfo({ requested: selectedRouteType, found: fbType })
+            break
           }
         }
-
-        // Final fallback: merge ALL fallback types into one combined set so that
-        // even very small towns with sparse data can still produce a usable route.
-        if (found.length < 2) {
-          const merged: POI[] = [...found]
-          const seenNames = new Set(merged.map(p => p.name.toLowerCase()))
-          for (const fbType of ROUTE_FALLBACKS[selectedRouteType] || []) {
-            const fbPOIs = await searchForType(fbType)
-            for (const p of fbPOIs) {
-              if (!seenNames.has(p.name.toLowerCase())) {
-                merged.push(p); seenNames.add(p.name.toLowerCase())
-              }
-            }
-            if (merged.length >= 4) break
-          }
-          if (merged.length > found.length) {
-            found = merged
-            setFallbackInfo({ requested: selectedRouteType, found: selectedRouteType })
-          }
-        }
-
-        pois = found
       }
 
       if (pois.length === 0) {
@@ -226,8 +268,12 @@ export function RouteSetupPage() {
         return
       }
 
-      // Order POIs for optimal walking path
+      // Order POIs for an optimal walking path: nearest-neighbour + 2-opt
+      // (removes crossings / zigzags) and trim to the time budget.
       pois = orderPOIsOptimally(pois, selectedCity.lat, selectedCity.lon)
+      pois = fitRouteToTimeBudget(pois, selectedDuration)
+      // Drop any "lonely" outlier whose neighbours are both far away.
+      pois = pruneOutlierPOIs(pois, 1500)
       setPOIs(pois)
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
