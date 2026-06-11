@@ -15,8 +15,17 @@ describe('prepareTextForSpeech', () => {
   })
 
   it('truncates very long text at a sentence boundary', () => {
-    const long = ('Frase de prueba bastante larga. ').repeat(100)
+    const long = ('Frase de prueba bastante larga. ').repeat(300)
     const out = prepareTextForSpeech(long, 'es')
-    expect(out.length).toBeLessThanOrEqual(1205)
+    // Limit is ~4000 chars (≈ 4-5 min of speech) so the 320-420 word AI
+    // narrations are NEVER cut; only truly runaway text is trimmed.
+    expect(out.length).toBeLessThanOrEqual(4005)
+    expect(out.trimEnd().endsWith('.')).toBe(true)
+  })
+
+  it('does NOT truncate a full-length AI narration (~2800 chars)', () => {
+    const narration = ('Una frase del guía con datos interesantes. ').repeat(65)
+    const out = prepareTextForSpeech(narration, 'es')
+    expect(out.length).toBeGreaterThan(2500)
   })
 })

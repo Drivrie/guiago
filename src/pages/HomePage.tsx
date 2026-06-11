@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CitySearch } from '../components/CitySearch'
+import { IOSInstallHint } from '../components/IOSInstallHint'
 import { useAppStore } from '../stores/appStore'
 import { getNearbyCities, getFlagEmoji, getCityDetails } from '../services/nominatim'
 import { hasAIKey } from '../services/ai'
@@ -19,9 +20,22 @@ const FALLBACK_CITIES: Array<City & { emoji: string; tag: { es: string; en: stri
 ]
 
 export function HomePage() {
-  const { language, setLanguage, recentCities, setCity, anthropicApiKey } = useAppStore()
+  const {
+    language, setLanguage, recentCities, setCity, anthropicApiKey,
+    currentRoute, pois, currentPOIIndex, setRoute, setPOIs, setCurrentPOIIndex,
+  } = useAppStore()
   const aiActive = hasAIKey(anthropicApiKey)
   const navigate = useNavigate()
+
+  // Resume banner: a persisted route with unvisited stops can be picked up
+  // exactly where the user left it (e.g. lunch break mid-tour, app closed).
+  const hasResumableRoute = !!currentRoute && pois.length > 0 && currentPOIIndex < pois.length
+
+  function discardRoute() {
+    setRoute(null)
+    setPOIs([])
+    setCurrentPOIIndex(0)
+  }
 
   const { setOffline } = useAppStore()
   useEffect(() => {
@@ -155,6 +169,43 @@ export function HomePage() {
             </button>
           </div>
         </div>
+
+        <IOSInstallHint />
+
+        {/* Resume in-progress route */}
+        {hasResumableRoute && (
+          <div className="w-full bg-gradient-to-r from-emerald-600 to-emerald-700 rounded-2xl p-4 mb-4 shadow-lg shadow-emerald-500/20">
+            <button
+              onClick={() => navigate('/route/active')}
+              className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform"
+            >
+              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                <span className="text-2xl">▶️</span>
+              </div>
+              <div className="flex-1 text-left">
+                <p className="text-white font-black text-base">
+                  {language === 'es'
+                    ? `Continuar ruta en ${currentRoute!.city.name}`
+                    : `Resume route in ${currentRoute!.city.name}`}
+                </p>
+                <p className="text-emerald-200 text-xs mt-0.5">
+                  {language === 'es'
+                    ? `Parada ${Math.min(currentPOIIndex + 1, pois.length)} de ${pois.length} · ${pois[Math.min(currentPOIIndex, pois.length - 1)]?.name || ''}`
+                    : `Stop ${Math.min(currentPOIIndex + 1, pois.length)} of ${pois.length} · ${pois[Math.min(currentPOIIndex, pois.length - 1)]?.name || ''}`}
+                </p>
+              </div>
+              <svg className="w-5 h-5 text-emerald-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <button
+              onClick={discardRoute}
+              className="mt-2 w-full text-center text-emerald-200 text-xs underline underline-offset-2"
+            >
+              {language === 'es' ? 'Descartar esta ruta' : 'Discard this route'}
+            </button>
+          </div>
+        )}
 
         {/* "What to visit today" — prominent CTA */}
         <button
