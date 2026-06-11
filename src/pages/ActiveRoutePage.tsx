@@ -11,7 +11,9 @@ import { buildNarration, prefetchNarration } from '../services/narration'
 import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
 import { speak, stop as stopTTS } from '../services/tts'
 import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services/backgroundKeepAlive'
-import { unlock as unlockAudio } from '../services/audioPlayback'
+import { unlock as unlockAudio, setNavigationHandlers } from '../services/audioPlayback'
+import { announce } from '../services/announce'
+import { RouteProgressBar } from '../components/RouteProgressBar'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
@@ -427,6 +429,30 @@ export function ActiveRoutePage() {
     setPhase('at_poi')
   }
 
+  // ---- Go back to the PREVIOUS POI (used by the lock-screen back button) ----
+  function goPrevious() {
+    if (currentPOIIndex <= 0) return
+    stopTTS()
+    setCurrentPOIIndex(currentPOIIndex - 1)
+    setPhase('at_poi')
+  }
+
+  // ---- Register MediaSession nexttrack / previoustrack so the iPhone
+  //      lock-screen forward/back buttons (and AirPods double-tap) advance
+  //      the tour. Re-registered every time the current index changes so
+  //      the closures see fresh state. ----
+  useEffect(() => {
+    setNavigationHandlers({
+      onNext: () => {
+        if (phase === 'at_poi' || phase === 'post_poi') {
+          navMode === 'external' ? advanceExternal() : advanceToNext()
+        }
+      },
+      onPrev: () => goPrevious(),
+    })
+    return () => setNavigationHandlers({ onNext: undefined, onPrev: undefined })
+  }, [currentPOIIndex, phase, navMode, pois.length, isLast])
+
   // Enter a POI's explanation in external mode from a user gesture (iOS needs
   // the silent keep-alive audio to start inside the tap).
   function explainPOIExternal(idx: number) {
@@ -450,16 +476,26 @@ export function ActiveRoutePage() {
     }
     const nextIdx = currentPOIIndex + 1
     const nextPOI = pois[nextIdx]
-    // Speak "heading to X + first instruction" and skip step 0 in the auto-voice effect
+    // "Heading to X" announcement uses the NEURAL voice path so the tour
+    // doesn't switch to robotic Siri between stops. The first turn-by-turn
+    // step stays on Web Speech (it's short and the audio queue is freed).
     if (!voiceMuted && nextPOI) {
       const nextSeg = currentRoute?.segments?.[nextIdx - 1]
       const firstStep = nextSeg?.steps?.[0]
+      const distMeters = Math.round(nextSeg?.distance ?? 0)
+      const distStr = distMeters > 50
+        ? (language === 'es'
+            ? (distMeters < 1000 ? `a unos ${Math.round(distMeters / 10) * 10} metros` : `a unos ${(distMeters / 1000).toFixed(1)} kilómetros`)
+            : (distMeters < 1000 ? `about ${Math.round(distMeters / 10) * 10} metres away` : `about ${(distMeters / 1000).toFixed(1)} kilometres away`))
+        : ''
       const prefix = language === 'es'
-        ? `¡Vamos! Ahora hacia ${nextPOI.name}. `
-        : `Let's go! Now heading to ${nextPOI.name}. `
-      const instruction = firstStep ? buildVoiceInstruction(firstStep, language) : ''
-      speak(prefix + instruction, language === 'es' ? 'es-ES' : 'en-US', { rate: 1.05 })
-      lastSpokenStepRef.current = 0 // skip step 0 in auto-voice effect (already spoken)
+        ? `¡Vamos! Ahora nos dirigimos hacia ${nextPOI.name}, ${distStr}. Sigue las indicaciones.`
+        : `Let's go! Now heading to ${nextPOI.name}, ${distStr}. Follow the directions.`
+      announce(prefix, language, { poi: nextPOI }).catch(() => undefined)
+      // Skip step 0 in the auto-voice effect — the neural announcement
+      // already covered it, and we don't want Web Speech to overlap.
+      lastSpokenStepRef.current = 0
+      if (firstStep) void firstStep // referenced for future inline instruction
     } else {
       lastSpokenStepRef.current = -1
     }
@@ -1059,8 +1095,12 @@ export function ActiveRoutePage() {
   if (phase === 'navigating') {
     return (
       <div className="flex flex-col h-screen bg-stone-900">
+        {/* Persistent progress strip (stops + km + min remaining) */}
+        <div className="safe-top">
+          <RouteProgressBar distanceToPOI={distanceToPOI} />
+        </div>
         {/* Top bar */}
-        <div className="flex items-center gap-3 px-4 py-3 bg-stone-900 safe-top z-20">
+        <div className="flex items-center gap-3 px-4 py-3 bg-stone-900 z-20">
           <button
             onClick={() => setPhase('selecting_start')}
             className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
@@ -1320,6 +1360,10 @@ export function ActiveRoutePage() {
 
     return (
       <div className="flex flex-col h-screen bg-stone-50" style={{ WebkitOverflowScrolling: 'touch' }}>
+        {/* Persistent progress strip */}
+        <div className="safe-top bg-stone-900">
+          <RouteProgressBar distanceToPOI={distanceToPOI} />
+        </div>
         {/* Compact image / map header — max 28vh so audio is always visible */}
         <div
           className={`relative flex-shrink-0 transition-transform duration-300 ${justArrived ? 'scale-[1.01]' : 'scale-100'}`}

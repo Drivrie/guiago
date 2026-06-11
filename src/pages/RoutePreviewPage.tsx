@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
 import { MapView } from '../components/MapView'
+import { AudioPlayer } from '../components/AudioPlayer'
 import { calculateDistance, orderPOIsOptimally, pruneOutlierPOIs } from '../services/routing'
-import { prefetchNarration } from '../services/narration'
+import { buildNarration, prefetchNarration } from '../services/narration'
 import type { POI } from '../types'
 
 /**
@@ -27,6 +28,29 @@ export function RoutePreviewPage() {
   const navigate = useNavigate()
   const { language, currentRoute, pois, setPOIs, setRoute, setCurrentPOIIndex, anthropicApiKey } = useAppStore()
   const es = language === 'es'
+
+  // Only ONE narration panel expanded at a time so we never overlap audio.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [scripts, setScripts] = useState<Record<string, string>>({})
+  const [loadingId, setLoadingId] = useState<string | null>(null)
+
+  async function toggleNarration(poi: POI) {
+    if (expandedId === poi.id) {
+      setExpandedId(null)
+      return
+    }
+    setExpandedId(poi.id)
+    if (scripts[poi.id]) return
+    setLoadingId(poi.id)
+    try {
+      const script = await buildNarration(poi, language, anthropicApiKey)
+      setScripts(s => ({ ...s, [poi.id]: script }))
+    } catch (err) {
+      console.warn('[preview] narration failed:', err)
+    } finally {
+      setLoadingId(curr => (curr === poi.id ? null : curr))
+    }
+  }
 
   // Background prefetch so the first 2-3 narrations are ready before the
   // user even hits "Empezar". By the time they're walking the cache is hot.
@@ -183,7 +207,7 @@ export function RoutePreviewPage() {
                   <p className="text-[11px] text-amber-700 mt-1 line-clamp-1">💡 {poi.tags['insiderTip']}</p>
                 )}
 
-                {/* Reorder buttons */}
+                {/* Reorder + listen buttons */}
                 <div className="flex items-center gap-1 mt-2">
                   <button
                     onClick={() => moveUp(idx)}
@@ -197,12 +221,41 @@ export function RoutePreviewPage() {
                     className="w-7 h-7 rounded-lg bg-stone-100 text-stone-600 text-xs disabled:opacity-30 active:scale-90"
                     aria-label="Move down"
                   >↓</button>
+                  <button
+                    onClick={() => toggleNarration(poi)}
+                    className={`ml-1 px-2.5 h-7 rounded-lg text-[11px] font-semibold active:scale-95 transition-all ${
+                      expandedId === poi.id ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-700'
+                    }`}
+                  >
+                    {expandedId === poi.id ? (es ? '▾ Ocultar' : '▾ Hide') : (es ? '🎧 Escuchar' : '🎧 Listen')}
+                  </button>
                   <span className="ml-auto text-[11px] text-stone-400">
                     ≈ {Math.min(25, Math.max(8, poi.estimatedVisitMinutes ?? 15))} min
                   </span>
                 </div>
               </div>
             </div>
+
+            {/* Inline audio player — only one expanded at a time. */}
+            {expandedId === poi.id && (
+              <div className="border-t border-stone-100 p-3 bg-stone-50">
+                {loadingId === poi.id && !scripts[poi.id] ? (
+                  <p className="text-center text-xs text-stone-500 py-3">
+                    {es ? 'Generando la narración…' : 'Generating the narration…'}
+                  </p>
+                ) : scripts[poi.id] ? (
+                  <AudioPlayer
+                    text={scripts[poi.id]}
+                    poiName={poi.name}
+                    poi={poi}
+                  />
+                ) : (
+                  <p className="text-center text-xs text-red-500 py-3">
+                    {es ? 'No se pudo generar la narración.' : 'Could not generate the narration.'}
+                  </p>
+                )}
+              </div>
+            )}
           </article>
         ))}
 

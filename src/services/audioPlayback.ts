@@ -92,10 +92,22 @@ function cleanup(): void {
 function attachMediaSessionHandlers(): void {
   if (listenersAttached || !('mediaSession' in navigator)) return
   listenersAttached = true
-  // The actions appear on iOS lock-screen / Control Centre / AirPods.
+  // These actions appear as buttons on iOS lock-screen / Control Centre /
+  // AirPods. Routed through callbacks set by the route page so the same
+  // element controls the underlying tour navigation (next POI, previous POI).
   navigator.mediaSession.setActionHandler?.('play', () => { audio?.play().catch(() => undefined) })
   navigator.mediaSession.setActionHandler?.('pause', () => { audio?.pause() })
   navigator.mediaSession.setActionHandler?.('stop', () => { stop() })
+  navigator.mediaSession.setActionHandler?.('nexttrack', () => { navHandlers.next?.() })
+  navigator.mediaSession.setActionHandler?.('previoustrack', () => { navHandlers.prev?.() })
+}
+
+// Callbacks the route page registers so lock-screen Next/Previous buttons
+// (MediaSession nexttrack / previoustrack) actually move the tour forward.
+const navHandlers: { next?: () => void; prev?: () => void } = {}
+export function setNavigationHandlers(handlers: { onNext?: () => void; onPrev?: () => void }): void {
+  navHandlers.next = handlers.onNext
+  navHandlers.prev = handlers.onPrev
 }
 
 function setMediaSessionMetadata(poi: POI): void {
