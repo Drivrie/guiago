@@ -42,6 +42,12 @@ function localWikiLang(city: City): string | null {
   return COUNTRY_TO_WIKI_LANG[code] || null
 }
 
+/** Public: local Wikipedia language for an ISO country code ('PL' → 'pl'). */
+export function wikiLangForCountry(countryCode?: string): string | null {
+  if (!countryCode) return null
+  return COUNTRY_TO_WIKI_LANG[countryCode.toUpperCase()] || null
+}
+
 /** Returns ranked list of Wikipedia languages to try for a city: [appLang, localLang, en] */
 function wikiLangsForCity(city: City, lang: Language): string[] {
   const result: string[] = [lang === 'es' ? 'es' : 'en']

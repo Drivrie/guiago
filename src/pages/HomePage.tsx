@@ -24,6 +24,7 @@ export function HomePage() {
   const {
     language, setLanguage, recentCities, setCity, anthropicApiKey,
     currentRoute, pois, currentPOIIndex, setRoute, setPOIs, setCurrentPOIIndex,
+    favoriteCities, toggleFavoriteCity, isFavoriteCity,
   } = useAppStore()
   const aiActive = hasAIKey(anthropicApiKey)
   const navigate = useNavigate()
@@ -242,6 +243,36 @@ export function HomePage() {
       </div>
 
       <div className="px-5 pb-10">
+        {/* Favourite cities */}
+        {favoriteCities.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider mb-3">
+              {language === 'es' ? '⭐ Tus ciudades favoritas' : '⭐ Your favourite cities'}
+            </h3>
+            <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+              {favoriteCities.map(city => (
+                <div
+                  key={city.id}
+                  className="flex-shrink-0 bg-amber-50 rounded-xl pl-4 pr-2 py-2.5 shadow-sm border border-amber-200 flex items-center gap-2"
+                >
+                  <button onClick={() => handleRecentCity(city)} className="flex items-center gap-2 active:scale-95 transition-transform">
+                    <span>⭐</span>
+                    <div className="text-left">
+                      <p className="font-semibold text-stone-800 text-sm">{city.name}</p>
+                      <p className="text-xs text-stone-400">{city.country}</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => toggleFavoriteCity(city)}
+                    className="w-6 h-6 text-stone-300 hover:text-red-400 text-sm"
+                    aria-label={language === 'es' ? 'Quitar de favoritas' : 'Remove from favourites'}
+                  >×</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Recent cities */}
         {recentCities.length > 0 && (
           <div className="mb-8">
@@ -250,17 +281,23 @@ export function HomePage() {
             </h3>
             <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
               {recentCities.map(city => (
-                <button
+                <div
                   key={city.id}
-                  onClick={() => handleRecentCity(city)}
-                  className="flex-shrink-0 bg-white rounded-xl px-4 py-2.5 shadow-sm border border-stone-100 flex items-center gap-2 active:scale-95 transition-transform"
+                  className="flex-shrink-0 bg-white rounded-xl pl-4 pr-2 py-2.5 shadow-sm border border-stone-100 flex items-center gap-2"
                 >
-                  <span>🏙️</span>
-                  <div className="text-left">
-                    <p className="font-semibold text-stone-800 text-sm">{city.name}</p>
-                    <p className="text-xs text-stone-400">{city.country}</p>
-                  </div>
-                </button>
+                  <button onClick={() => handleRecentCity(city)} className="flex items-center gap-2 active:scale-95 transition-transform">
+                    <span>🏙️</span>
+                    <div className="text-left">
+                      <p className="font-semibold text-stone-800 text-sm">{city.name}</p>
+                      <p className="text-xs text-stone-400">{city.country}</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => toggleFavoriteCity(city)}
+                    className={`w-6 h-6 text-sm ${isFavoriteCity(city.id) ? 'text-amber-400' : 'text-stone-300'}`}
+                    aria-label={language === 'es' ? 'Marcar favorita' : 'Toggle favourite'}
+                  >★</button>
+                </div>
               ))}
             </div>
           </div>

@@ -14,6 +14,7 @@ import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services
 import { unlock as unlockAudio, setNavigationHandlers } from '../services/audioPlayback'
 import { announce } from '../services/announce'
 import { RouteProgressBar } from '../components/RouteProgressBar'
+import { POIGallery } from '../components/POIGallery'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { RouteSegment, POI } from '../types'
 
@@ -1430,6 +1431,12 @@ export function ActiveRoutePage() {
 
         {/* Scrollable content below audio */}
         <div className="flex-1 overflow-y-auto px-4 py-3 pb-36" style={{ WebkitOverflowScrolling: 'touch' }}>
+          {/* Photo gallery from Wikimedia Commons (taps open fullscreen) */}
+          {currentPOI && (
+            <div className="-mx-4 mb-3">
+              <POIGallery lat={currentPOI.lat} lon={currentPOI.lon} excludeUrl={currentPOI.imageUrl} />
+            </div>
+          )}
           {currentPOI && (currentPOI.address || currentPOI.openingHours || currentPOI.estimatedVisitMinutes) && (
             <div className="flex flex-wrap gap-2 mb-4">
               {currentPOI.address && (

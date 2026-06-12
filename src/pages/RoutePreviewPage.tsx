@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
 import { MapView } from '../components/MapView'
 import { AudioPlayer } from '../components/AudioPlayer'
+import { OfflineDownload } from '../components/OfflineDownload'
 import { calculateDistance, orderPOIsOptimally, pruneOutlierPOIs } from '../services/routing'
 import { buildNarration, prefetchNarration } from '../services/narration'
 import type { POI } from '../types'
@@ -270,6 +271,12 @@ export function RoutePreviewPage() {
             ? 'Al iniciar el guiado a pie, el orden se ajustará automáticamente desde tu punto de salida real. Las paradas que quites no volverán.'
             : 'When you start walking guidance, the order auto-adjusts from your actual start point. Removed stops stay removed.'}
         </p>
+
+        {/* Offline download — descriptions + narrations + neural MP3s, so the
+            whole tour works without coverage. Saved under "Rutas descargadas". */}
+        <div className="mt-4">
+          <OfflineDownload route={{ ...currentRoute, pois }} />
+        </div>
       </div>
 
       {/* Start button (fixed bottom) */}

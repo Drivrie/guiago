@@ -1,4 +1,5 @@
 import type { WikiResult, Language } from '../types'
+import { wikiLangForCountry } from './wikigeo'
 
 const WIKI_API = {
   es: 'https://es.wikipedia.org/w/api.php',
@@ -238,9 +239,19 @@ export async function getPOIInfoMultiSource(
   // 1. If we have a city context, prefer geosearch — only Wikipedia articles whose
   //    coordinates fall within `radiusMeters` of the city are accepted. This is
   //    the only reliable way to prevent cross-city contamination.
+  //    Searched across app language + the country's LOCAL Wikipedia + English,
+  //    matching what route generation does — previously this only looked at
+  //    one language, which is why "search a place" missed POIs that route
+  //    building later found.
   if (context?.lat !== undefined && context?.lon !== undefined) {
-    const geoHit = await searchPOIByGeo(name, lang, context.lat, context.lon, context.radiusMeters ?? 6000)
-    if (geoHit) return geoHit
+    const geoLangs: string[] = [lang]
+    const local = wikiLangForCountry(context.countryCode)
+    if (local && !geoLangs.includes(local)) geoLangs.push(local)
+    if (!geoLangs.includes('en')) geoLangs.push('en')
+    for (const gl of geoLangs) {
+      const geoHit = await searchPOIByGeo(name, gl, context.lat, context.lon, context.radiusMeters ?? 6000)
+      if (geoHit) return geoHit
+    }
   }
 
   // 2. City-scoped name search: append city + country to the query so MediaWiki's
@@ -325,13 +336,13 @@ function titleSimilarity(query: string, title: string): number {
  */
 async function searchPOIByGeo(
   name: string,
-  lang: Language,
+  lang: string, // any Wikipedia language code, not just app languages
   lat: number,
   lon: number,
   radiusMeters: number
 ): Promise<WikiResult | null> {
   try {
-    const base = WIKI_API[lang]
+    const base = `https://${lang}.wikipedia.org/w/api.php`
     // First, run a city-scoped full-text search to identify candidate page IDs.
     const searchParams = new URLSearchParams({
       action: 'query', list: 'search', srsearch: name,

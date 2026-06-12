@@ -7,6 +7,7 @@ import { AudioPlayer } from '../components/AudioPlayer'
 import { Button } from '../components/ui/Button'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { getPOIInfoMultiSource, generateAudioScript } from '../services/wikipedia'
+import { findNearbyPlaces, type NearbyPlace } from '../services/nearby'
 import { generateAIPOIExplanation, getAIKey, hasAIKey } from '../services/ai'
 import { ROUTE_TYPE_INFO } from '../types'
 import type { City, RouteType, RouteDuration, WikiResult } from '../types'
@@ -71,6 +72,7 @@ export function TodayPage() {
   const [poiResult, setPoiResult] = useState<WikiResult | null>(null)
   const [poiAudioScript, setPoiAudioScript] = useState('')
   const [poiSearchLoading, setPoiSearchLoading] = useState(false)
+  const [nearbyPlaces, setNearbyPlaces] = useState<NearbyPlace[] | null>(null)
   const [poiAudioLoading, setPoiAudioLoading] = useState(false)
   const [searchExpanded, setSearchExpanded] = useState(false)
 
@@ -192,46 +194,47 @@ export function TodayPage() {
     setPoiSearchLoading(true)
     setPoiResult(null)
     setPoiAudioScript('')
+    setNearbyPlaces(null)
     try {
-      // 1. Try a Wikipedia geosearch — far more reliable than Nominatim's
-      //    reverse name guess, which often returns a generic street name.
-      const geoParams = new URLSearchParams({
-        action: 'query',
-        list: 'geosearch',
-        gscoord: `${userCoords[0]}|${userCoords[1]}`,
-        gsradius: '500',
-        gslimit: '5',
-        format: 'json',
-        origin: '*',
-      })
-      const wikiLang = es ? 'es' : 'en'
-      const geoResp = await fetch(`https://${wikiLang}.wikipedia.org/w/api.php?${geoParams}`)
-      let placeName = ''
-      if (geoResp.ok) {
-        const geoData = await geoResp.json() as { query?: { geosearch?: Array<{ title: string; lat: number; lon: number }> } }
-        const nearest = geoData.query?.geosearch?.[0]
-        if (nearest) placeName = nearest.title
-      }
-
-      // 2. Fallback: reverse geocode to the nearest named place via Nominatim
-      if (!placeName) {
+      // Multi-source discovery: Wikipedia in app + local-country + English
+      // languages, merged with OpenStreetMap — same breadth route generation
+      // uses, so this list finally shows the POIs that routes can find.
+      const places = await findNearbyPlaces(
+        userCoords[0],
+        userCoords[1],
+        language,
+        location?.city.countryCode,
+        800,
+      )
+      setNearbyPlaces(places)
+      if (places.length === 0) {
+        // Last resort: reverse geocode to A name and search it directly.
         const resp = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${userCoords[0]}&lon=${userCoords[1]}&zoom=18&addressdetails=1&namedetails=1`,
           { headers: { 'Accept-Language': es ? 'es' : 'en' } }
         )
         if (resp.ok) {
           const data = await resp.json() as { name?: string; display_name?: string; namedetails?: Record<string, string> }
-          placeName = data.namedetails?.name || data.name || data.display_name?.split(',')[0] || ''
+          const placeName = data.namedetails?.name || data.name || data.display_name?.split(',')[0] || ''
+          if (placeName) {
+            setPoiQuery(placeName)
+            setPoiSearchLoading(false)
+            await searchPOI(placeName)
+            return
+          }
         }
       }
-
-      if (!placeName) { setPoiSearchLoading(false); return }
-      setPoiQuery(placeName)
       setPoiSearchLoading(false)
-      await searchPOI(placeName)
     } catch {
       setPoiSearchLoading(false)
     }
+  }
+
+  /** Tap on a nearby place → full explanation via the city-scoped search. */
+  async function selectNearbyPlace(name: string) {
+    setNearbyPlaces(null)
+    setPoiQuery(name)
+    await searchPOI(name)
   }
 
   function handleStart() {
@@ -434,6 +437,44 @@ export function TodayPage() {
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     <p className="text-white/60 text-sm">{es ? 'Buscando en múltiples fuentes...' : 'Searching multiple sources...'}</p>
                   </div>
+                )}
+
+                {/* Nearby places list — "what's around me right now" */}
+                {nearbyPlaces && nearbyPlaces.length > 0 && !poiResult && (
+                  <div className="rounded-2xl overflow-hidden bg-white/5 border border-white/10">
+                    <p className="text-white/70 text-xs font-bold uppercase tracking-wider px-4 pt-3 pb-1">
+                      {es ? `${nearbyPlaces.length} lugares a tu alrededor` : `${nearbyPlaces.length} places around you`}
+                    </p>
+                    <div className="divide-y divide-white/5 max-h-80 overflow-y-auto">
+                      {nearbyPlaces.map(place => (
+                        <button
+                          key={`${place.name}-${place.lat}`}
+                          onClick={() => selectNearbyPlace(place.name)}
+                          className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-white/10"
+                        >
+                          {place.imageUrl ? (
+                            <img src={place.imageUrl} alt="" className="w-11 h-11 rounded-lg object-cover flex-shrink-0" loading="lazy" />
+                          ) : (
+                            <div className="w-11 h-11 rounded-lg bg-white/10 flex items-center justify-center text-lg flex-shrink-0">📍</div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white text-sm font-semibold truncate">{place.name}</p>
+                            {place.description && (
+                              <p className="text-white/40 text-[11px] truncate">{place.description}</p>
+                            )}
+                          </div>
+                          <span className="text-blue-300 text-xs font-mono flex-shrink-0">
+                            {place.distanceM < 1000 ? `${place.distanceM} m` : `${(place.distanceM / 1000).toFixed(1)} km`}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {nearbyPlaces && nearbyPlaces.length === 0 && !poiResult && !poiSearchLoading && (
+                  <p className="text-white/40 text-xs text-center py-2">
+                    {es ? 'No encontramos lugares documentados en 800 m a la redonda.' : 'No documented places found within 800 m.'}
+                  </p>
                 )}
 
                 {poiResult && (

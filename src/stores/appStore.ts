@@ -16,6 +16,9 @@ interface AppStore {
   setCity: (city: City | null) => void
   recentCities: City[]
   addRecentCity: (city: City) => void
+  favoriteCities: City[]
+  toggleFavoriteCity: (city: City) => void
+  isFavoriteCity: (cityId: string) => boolean
 
   // Route config
   selectedRouteType: RouteType | null
@@ -86,6 +89,17 @@ export const useAppStore = create<AppStore>()(
         const filtered = current.filter(c => c.id !== city.id)
         set({ recentCities: [city, ...filtered].slice(0, 5) })
       },
+      favoriteCities: [],
+      toggleFavoriteCity: (city) => {
+        const current = get().favoriteCities
+        const exists = current.some(c => c.id === city.id)
+        set({
+          favoriteCities: exists
+            ? current.filter(c => c.id !== city.id)
+            : [city, ...current].slice(0, 10),
+        })
+      },
+      isFavoriteCity: (cityId) => get().favoriteCities.some(c => c.id === cityId),
 
       selectedRouteType: null,
       setRouteType: (type) => set({ selectedRouteType: type }),
@@ -155,6 +169,7 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) => ({
         language: state.language,
         recentCities: state.recentCities,
+        favoriteCities: state.favoriteCities,
         audioRate: state.audioRate,
         anthropicApiKey: state.anthropicApiKey,
         visitedPOIs: state.visitedPOIs,
