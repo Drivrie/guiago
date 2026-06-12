@@ -187,6 +187,22 @@ async function fetchPollinations(text: string, lang: 'es' | 'en'): Promise<Blob>
   return audioBlobOrThrow(resp, 'Pollinations')
 }
 
+/** Google Translate TTS — used as a robust fallback when the primary neural
+ *  provider fails. Returns natural-sounding MP3, CORS-enabled, no key. Chunks
+ *  hard-capped at 200 chars (the endpoint truncates beyond ~200). */
+async function fetchGoogleTranslate(text: string, lang: 'es' | 'en'): Promise<Blob> {
+  // tl=es / en, q=text, client=tw-ob is the public TTS client.
+  const tl = lang === 'es' ? 'es' : 'en'
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${tl}&client=tw-ob`
+  const resp = await fetchWithTimeout(url)
+  return audioBlobOrThrow(resp, 'Google Translate')
+}
+
+// Last in-session error so the UI can show ROOT cause instead of a generic
+// "neural failed" message. Cleared on each successful synthesize().
+let lastError: string = ''
+export function getLastError(): string { return lastError }
+
 async function fetchOpenAI(text: string, lang: 'es' | 'en'): Promise<Blob> {
   const key = getOpenAIKey()
   if (!key) throw new Error('OpenAI TTS key missing')
@@ -227,31 +243,56 @@ export async function synthesize(
   poiId: string,
 ): Promise<Blob[] | null> {
   const provider = getProvider()
-  if (provider === 'none' || !text.trim()) return null
+  if (provider === 'none' || !text.trim()) {
+    lastError = provider === 'none' ? 'Voz neuronal desactivada' : 'Texto vacío'
+    return null
+  }
 
-  const maxChars = provider === 'openai' ? OPENAI_MAX : POLLINATIONS_MAX
+  // Per-chunk fetcher chain: tries the configured provider first, then a
+  // Google Translate TTS fallback (small chunks, very robust). The OpenAI
+  // path skips fallbacks because the user paid for that specific voice.
+  const isOpenAI = provider === 'openai'
+  const primaryMax = isOpenAI ? OPENAI_MAX : POLLINATIONS_MAX
+  // Use the SHORTEST chunk size across the fallback chain so the same chunk
+  // text fits every provider — Google TTS truncates anything over ~200 chars.
+  const maxChars = isOpenAI ? primaryMax : 180
   const chunks = chunkText(text, maxChars)
 
-  const fetcher = provider === 'openai' ? fetchOpenAI : fetchPollinations
+  let errorReasons: string[] = []
 
   const blobs = await Promise.all(chunks.map(async (chunk, i) => {
     const key = blobKey(poiId, lang, i, provider)
     const cached = await getAudioBlob(key).catch(() => null)
     if (cached) return cached
-    try {
-      const blob = await fetcher(chunk, lang)
-      await saveAudioBlob(key, blob, provider).catch(() => { /* best effort */ })
-      return blob
-    } catch (err) {
-      console.warn(`[neuralTTS] chunk ${i} failed:`, err)
-      return null
+
+    const tryFetchers: Array<{ name: string; fn: (t: string, l: 'es' | 'en') => Promise<Blob> }> = isOpenAI
+      ? [{ name: 'OpenAI', fn: fetchOpenAI }]
+      : [
+          { name: 'Pollinations', fn: fetchPollinations },
+          { name: 'GoogleTranslate', fn: fetchGoogleTranslate },
+        ]
+
+    for (const { name, fn } of tryFetchers) {
+      try {
+        const blob = await fn(chunk, lang)
+        await saveAudioBlob(key, blob, provider).catch(() => { /* best effort */ })
+        return blob
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        errorReasons.push(`${name}: ${msg}`)
+        console.warn(`[neuralTTS] chunk ${i} via ${name} failed:`, msg)
+      }
     }
+    return null
   }))
 
   const ok = blobs.filter((b): b is Blob => !!b)
-  // All-or-nothing: a missing chunk would leave a hole mid-narration, which
-  // is worse than falling back to a complete Web Speech reading.
-  return ok.length === chunks.length && ok.length > 0 ? ok : null
+  if (ok.length === chunks.length && ok.length > 0) {
+    lastError = ''
+    return ok
+  }
+  lastError = errorReasons[0] || 'Sin respuesta de los proveedores de voz'
+  return null
 }
 
 /** True when a neural provider is configured (used to choose the audio path). */

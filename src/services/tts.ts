@@ -113,6 +113,31 @@ function speakChunks(
   window.speechSynthesis.speak(utterance)
 }
 
+// ---------------------------------------------------------------------------
+// iOS Web Speech "priming"
+//
+// iOS Safari blocks `speechSynthesis.speak()` whenever the call happens
+// OUTSIDE a user gesture. Our preview fallback runs after `await synthesize`
+// (3-20 s later), so the gesture is long gone and Siri stayed silent.
+//
+// The standard workaround is to fire an inaudible utterance INSIDE the tap
+// gesture: once iOS has seen one successful speak() in this session, every
+// subsequent speak() works without a gesture.
+// ---------------------------------------------------------------------------
+let primed = false
+
+export function primeWebSpeech(): void {
+  if (primed || !isSupported()) return
+  try {
+    window.speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance(' ')
+    u.volume = 0
+    u.rate = 1
+    window.speechSynthesis.speak(u)
+    primed = true
+  } catch { /* best effort */ }
+}
+
 export function speak(
   text: string,
   lang: TTSLang = 'es-ES',

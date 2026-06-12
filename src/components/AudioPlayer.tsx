@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { speak, stop as stopTTS, pause as pauseTTS, resume as resumeTTS, isSpeaking, setRate as setTTSRate, SPEED_OPTIONS, prepareTextForSpeech } from '../services/tts'
+import { speak, stop as stopTTS, pause as pauseTTS, resume as resumeTTS, isSpeaking, setRate as setTTSRate, SPEED_OPTIONS, prepareTextForSpeech, primeWebSpeech } from '../services/tts'
 import { startKeepAlive, stopKeepAlive } from '../services/backgroundKeepAlive'
 import * as neuralPlayer from '../services/audioPlayback'
 import { synthesize, isNeuralActive, getProviderLabel } from '../services/neuralTTS'
@@ -109,6 +109,7 @@ export function AudioPlayer({ text, poiName, poi, autoPlay = false, onPlayStart,
     // calls on elements that have already played within a gesture.
     startKeepAlive().catch(() => {})
     neuralPlayer.unlock()
+    primeWebSpeech() // ensures the Web Speech fallback also works post-await
 
     if (paused) {
       if (neuralPath) neuralPlayer.resume()

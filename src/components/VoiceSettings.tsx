@@ -5,11 +5,11 @@ import {
   getOpenAIKey, setOpenAIKey,
   getVoice, setVoice,
   POLLINATIONS_VOICES, OPENAI_VOICES,
-  synthesize,
+  synthesize, getLastError,
   type NeuralProviderId,
 } from '../services/neuralTTS'
 import * as audioPlayback from '../services/audioPlayback'
-import { speak } from '../services/tts'
+import { speak, primeWebSpeech } from '../services/tts'
 
 export function VoiceSettings() {
   const { language } = useAppStore()
@@ -22,6 +22,7 @@ export function VoiceSettings() {
   const [showKey, setShowKey] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [previewError, setPreviewError] = useState(false)
+  const [errorDetail, setErrorDetail] = useState('')
 
   function applyProvider(p: NeuralProviderId) {
     setProvider(p)
@@ -42,11 +43,15 @@ export function VoiceSettings() {
   async function preview() {
     setPreviewing(true)
     setPreviewError(false)
+    setErrorDetail('')
     audioPlayback.stop()
-    // Unlock the shared <audio> element SYNCHRONOUSLY inside this tap —
-    // without it, iOS rejects the play() that happens after the async fetch
-    // and the preview is silently mute.
+    // BOTH unlocks must happen SYNCHRONOUSLY inside this tap. Without the
+    // audio unlock iOS rejects the post-fetch <audio>.play(); without the
+    // Web Speech prime, the system-voice fallback (which runs after `await
+    // synthesize`) is also blocked because the gesture is lost — that left
+    // the user with the amber warning and zero sound.
     audioPlayback.unlock()
+    primeWebSpeech()
     const sample = es
       ? 'Hola, soy tu guía. Tienes delante uno de los lugares más fascinantes de la ciudad. Acompáñame.'
       : 'Hi, I\'m your guide. You\'re standing in front of one of the most fascinating places in the city. Come with me.'
@@ -56,10 +61,13 @@ export function VoiceSettings() {
         audioPlayback.play(blobs, { rate: 1.0, onEnd: () => setPreviewing(false) })
         return
       }
-    } catch (err) { console.warn('[VoiceSettings] preview failed:', err) }
-    // Neural failed → make the failure AUDIBLE and VISIBLE instead of silent:
-    // play the sample with the system voice and show a notice.
+    } catch (err) {
+      console.warn('[VoiceSettings] preview failed:', err)
+      setErrorDetail(err instanceof Error ? err.message : String(err))
+    }
+    // Neural failed → make the failure AUDIBLE and VISIBLE.
     setPreviewError(true)
+    setErrorDetail(prev => prev || getLastError())
     speak(sample, es ? 'es-ES' : 'en-US', { onEnd: () => setPreviewing(false) })
   }
 
@@ -150,11 +158,16 @@ export function VoiceSettings() {
             {previewing ? (es ? 'Reproduciendo…' : 'Playing…') : (es ? '▶ Probar voz' : '▶ Preview voice')}
           </button>
           {previewError && (
-            <p className="mt-2 text-xs text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
-              {es
-                ? '⚠️ La voz neuronal no respondió — has oído la voz del sistema. Comprueba tu conexión; durante las rutas el guía usará la neuronal cuando esté disponible y Siri como respaldo.'
-                : '⚠️ The neural voice did not respond — you heard the system voice. Check your connection; during tours the guide uses neural when available, Siri as backup.'}
-            </p>
+            <div className="mt-2 text-xs text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
+              <p>{es
+                ? '⚠️ La voz neuronal no respondió — has oído la voz del sistema (Siri).'
+                : '⚠️ The neural voice did not respond — you heard the system voice (Siri).'}</p>
+              {errorDetail && (
+                <p className="mt-1 font-mono text-[10px] text-amber-600 break-all">
+                  {es ? 'Detalle: ' : 'Detail: '}{errorDetail}
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}

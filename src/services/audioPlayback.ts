@@ -147,10 +147,14 @@ export function unlock(): void {
   if (unlocked) return
   const a = ensureAudio()
   a.src = SILENT_WAV
+  // RACE FIX: the previous version paused + removed src inside .then() of
+  // the silent WAV. If a real narration arrived BEFORE that .then() fired
+  // (cached fetch), it would set src=MP3 first, then the deferred pause()
+  // killed it — leaving the user with zero sound. Now we just MARK the
+  // element as unlocked; the next play(blobs) call's stop() will replace
+  // the WAV's src naturally.
   a.play().then(() => {
     unlocked = true
-    a.pause()
-    a.removeAttribute('src')
   }).catch(() => { /* will retry on the next gesture */ })
 }
 
