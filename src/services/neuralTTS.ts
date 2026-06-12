@@ -25,6 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import { saveAudioBlob, getAudioBlob } from './storage'
+import type { PlayableChunk } from './audioPlayback'
 
 export type NeuralProviderId = 'openai' | 'pollinations' | 'none'
 
@@ -187,15 +188,14 @@ async function fetchPollinations(text: string, lang: 'es' | 'en'): Promise<Blob>
   return audioBlobOrThrow(resp, 'Pollinations')
 }
 
-/** Google Translate TTS — used as a robust fallback when the primary neural
- *  provider fails. Returns natural-sounding MP3, CORS-enabled, no key. Chunks
- *  hard-capped at 200 chars (the endpoint truncates beyond ~200). */
-async function fetchGoogleTranslate(text: string, lang: 'es' | 'en'): Promise<Blob> {
-  // tl=es / en, q=text, client=tw-ob is the public TTS client.
+/** Google Translate TTS — robust fallback. CRITICAL: the endpoint does NOT
+ *  send CORS headers, so fetch() always fails in a browser. But <audio src>
+ *  plays it fine (media elements are CORS-exempt for playback), so we return
+ *  the DIRECT URL instead of fetching. Trade-off: no IndexedDB caching for
+ *  this provider. Chunks must stay under ~190 chars (endpoint truncates). */
+function googleTranslateUrl(text: string, lang: 'es' | 'en'): string {
   const tl = lang === 'es' ? 'es' : 'en'
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${tl}&client=tw-ob`
-  const resp = await fetchWithTimeout(url)
-  return audioBlobOrThrow(resp, 'Google Translate')
+  return `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${tl}&client=tw-ob`
 }
 
 // Last in-session error so the UI can show ROOT cause instead of a generic
@@ -241,58 +241,83 @@ export async function synthesize(
   text: string,
   lang: 'es' | 'en',
   poiId: string,
-): Promise<Blob[] | null> {
+): Promise<PlayableChunk[] | null> {
   const provider = getProvider()
   if (provider === 'none' || !text.trim()) {
     lastError = provider === 'none' ? 'Voz neuronal desactivada' : 'Texto vacío'
     return null
   }
 
-  // Per-chunk fetcher chain: tries the configured provider first, then a
-  // Google Translate TTS fallback (small chunks, very robust). The OpenAI
-  // path skips fallbacks because the user paid for that specific voice.
   const isOpenAI = provider === 'openai'
-  const primaryMax = isOpenAI ? OPENAI_MAX : POLLINATIONS_MAX
   // Use the SHORTEST chunk size across the fallback chain so the same chunk
-  // text fits every provider — Google TTS truncates anything over ~200 chars.
-  const maxChars = isOpenAI ? primaryMax : 180
+  // text fits every provider — Google TTS truncates anything over ~190 chars.
+  const maxChars = isOpenAI ? OPENAI_MAX : 180
   const chunks = chunkText(text, maxChars)
 
-  let errorReasons: string[] = []
+  const errorReasons: string[] = []
 
-  const blobs = await Promise.all(chunks.map(async (chunk, i) => {
+  // SEQUENTIAL with per-chunk retry — parallel fetching is what triggered
+  // Pollinations' per-IP rate limit (HTTP 429). Sequential is slower for
+  // long narrations but the first chunk starts playing as soon as the whole
+  // set resolves, and most chunks come from the IndexedDB cache anyway.
+  const out: PlayableChunk[] = []
+  let pollinationsDown = false
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]
     const key = blobKey(poiId, lang, i, provider)
     const cached = await getAudioBlob(key).catch(() => null)
-    if (cached) return cached
+    if (cached) { out.push(cached); continue }
 
-    const tryFetchers: Array<{ name: string; fn: (t: string, l: 'es' | 'en') => Promise<Blob> }> = isOpenAI
-      ? [{ name: 'OpenAI', fn: fetchOpenAI }]
-      : [
-          { name: 'Pollinations', fn: fetchPollinations },
-          { name: 'GoogleTranslate', fn: fetchGoogleTranslate },
-        ]
+    let resolved: PlayableChunk | null = null
 
-    for (const { name, fn } of tryFetchers) {
+    if (isOpenAI) {
       try {
-        const blob = await fn(chunk, lang)
+        const blob = await fetchOpenAI(chunk, lang)
         await saveAudioBlob(key, blob, provider).catch(() => { /* best effort */ })
-        return blob
+        resolved = blob
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        errorReasons.push(`${name}: ${msg}`)
-        console.warn(`[neuralTTS] chunk ${i} via ${name} failed:`, msg)
+        errorReasons.push(`OpenAI: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    } else {
+      // 1. Pollinations (cacheable blob), with ONE retry after a pause on 429.
+      if (!pollinationsDown) {
+        for (let attempt = 0; attempt < 2 && !resolved; attempt++) {
+          try {
+            const blob = await fetchPollinations(chunk, lang)
+            await saveAudioBlob(key, blob, provider).catch(() => { /* best effort */ })
+            resolved = blob
+            break
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            errorReasons.push(`Pollinations: ${msg}`)
+            if (msg.includes('429') && attempt === 0) {
+              await new Promise(r => setTimeout(r, 1500))
+            } else {
+              // Hard failure (or second 429): stop hammering the endpoint
+              // for the remaining chunks of this narration.
+              pollinationsDown = true
+              break
+            }
+          }
+        }
+      }
+      // 2. Google Translate TTS — direct URL playback (no fetch, no CORS
+      //    requirement, no caching). Extremely reliable for short chunks.
+      if (!resolved) {
+        resolved = googleTranslateUrl(chunk, lang)
       }
     }
-    return null
-  }))
 
-  const ok = blobs.filter((b): b is Blob => !!b)
-  if (ok.length === chunks.length && ok.length > 0) {
-    lastError = ''
-    return ok
+    if (!resolved) {
+      lastError = errorReasons[0] || 'Sin respuesta de los proveedores de voz'
+      return null
+    }
+    out.push(resolved)
   }
-  lastError = errorReasons[0] || 'Sin respuesta de los proveedores de voz'
-  return null
+
+  lastError = errorReasons[0] || ''
+  return out.length > 0 ? out : null
 }
 
 /** True when a neural provider is configured (used to choose the audio path). */

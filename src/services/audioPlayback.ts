@@ -17,8 +17,14 @@
 
 import type { POI } from '../types'
 
+/** A playable chunk: a fetched Blob (cacheable) or a direct media URL.
+ *  Direct URLs matter because some TTS endpoints (Google Translate) don't
+ *  send CORS headers — fetch() fails, but <audio src> plays them fine
+ *  (media elements are exempt from CORS for playback). */
+export type PlayableChunk = Blob | string
+
 let audio: HTMLAudioElement | null = null
-let queue: Blob[] = []
+let queue: PlayableChunk[] = []
 let queueIdx = 0
 let currentUrls: string[] = []   // object URLs to revoke when done
 let onEndCb: (() => void) | null = null
@@ -61,11 +67,17 @@ function ensureAudio(): HTMLAudioElement {
 
 function playCurrent(): void {
   if (!audio) return
-  const blob = queue[queueIdx]
-  if (!blob) return
-  const url = URL.createObjectURL(blob)
-  currentUrls.push(url)
-  audio.src = url
+  const chunk = queue[queueIdx]
+  if (!chunk) return
+  // Blob → object URL (revoked on cleanup). String → direct media URL
+  // (Google Translate TTS et al. — playable by <audio> without CORS).
+  if (typeof chunk === 'string') {
+    audio.src = chunk
+  } else {
+    const url = URL.createObjectURL(chunk)
+    currentUrls.push(url)
+    audio.src = url
+  }
   audio.playbackRate = currentRate
   audio.play().catch(err => {
     console.warn('[audioPlayback] play() rejected:', err)
@@ -164,12 +176,12 @@ export interface PlayOptions {
   poi?: POI
 }
 
-/** Sequentially play a list of audio chunks. Resolves the previous queue. */
-export function play(blobs: Blob[], opts: PlayOptions = {}): void {
+/** Sequentially play a list of audio chunks (Blobs or direct media URLs). */
+export function play(chunks: PlayableChunk[], opts: PlayOptions = {}): void {
   stop()
-  if (blobs.length === 0) { opts.onEnd?.(); return }
+  if (chunks.length === 0) { opts.onEnd?.(); return }
   ensureAudio()
-  queue = blobs
+  queue = chunks
   queueIdx = 0
   onEndCb = opts.onEnd ?? null
   currentRate = opts.rate ?? 1.0
