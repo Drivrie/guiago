@@ -410,11 +410,17 @@ function getPOICount(durationMinutes: number): number {
 }
 
 export async function searchPOIsNearby(lat: number, lon: number, radius: number = 500): Promise<POI[]> {
+  // TOURIST-GUIDE perspective only: monuments, history, art, viewpoints,
+  // religious heritage, named fountains/towers… Plain restaurants/cafés/bars
+  // are deliberately EXCLUDED — they're businesses, not sights. A historic
+  // café still surfaces via its `historic` / `wikipedia` tag.
   const query = `[out:json][timeout:15];
 (
-  node["tourism"](around:${radius},${lat},${lon});
+  node["tourism"~"attraction|museum|gallery|artwork|viewpoint|monument"](around:${radius},${lat},${lon});
   node["historic"](around:${radius},${lat},${lon});
-  node["amenity"~"restaurant|bar|cafe|museum"](around:${radius},${lat},${lon});
+  node["amenity"~"place_of_worship|fountain"]["name"](around:${radius},${lat},${lon});
+  node["man_made"~"tower|windmill|lighthouse|city_gate"]["name"](around:${radius},${lat},${lon});
+  node["wikipedia"](around:${radius},${lat},${lon});
 );
 out body;`
 

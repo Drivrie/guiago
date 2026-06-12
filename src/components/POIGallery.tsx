@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { fetchNearbyImages, type CommonsImage } from '../services/commons'
 
 interface Props {
@@ -44,15 +45,32 @@ export function POIGallery({ lat, lon, excludeUrl }: Props) {
         ))}
       </div>
 
-      {/* Fullscreen lightbox */}
-      {lightbox && (
+      {/* Fullscreen lightbox — rendered via portal on document.body.
+          Inside the page tree it inherited the transformed/overflow ancestors'
+          stacking context, so `fixed` was clipped BEHIND the app content and
+          could not be dismissed. The portal escapes all of that. */}
+      {lightbox && createPortal(
         <div
-          className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-2"
+          className="fixed inset-0 z-[99999] bg-black/95 flex items-center justify-center p-3"
           onClick={() => setLightbox(null)}
         >
-          <img src={lightbox} alt="" className="max-w-full max-h-full object-contain rounded-lg" />
-          <button className="absolute top-safe-top right-4 mt-4 w-10 h-10 bg-white/10 rounded-full text-white text-xl">×</button>
-        </div>
+          <img
+            src={lightbox}
+            alt=""
+            className="max-w-full max-h-[85vh] object-contain rounded-lg"
+            onClick={e => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setLightbox(null)}
+            className="absolute right-4 w-11 h-11 bg-white/15 backdrop-blur-sm rounded-full text-white text-2xl leading-none flex items-center justify-center active:scale-90"
+            style={{ top: 'max(1rem, env(safe-area-inset-top))' }}
+            aria-label="Cerrar"
+          >×</button>
+          <p className="absolute bottom-6 left-0 right-0 text-center text-white/50 text-xs">
+            Toca fuera de la foto para cerrar
+          </p>
+        </div>,
+        document.body
       )}
     </>
   )

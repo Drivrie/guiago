@@ -26,7 +26,7 @@
 
 import { saveAudioBlob, getAudioBlob } from './storage'
 
-export type NeuralProviderId = 'openai' | 'streamelements' | 'none'
+export type NeuralProviderId = 'openai' | 'pollinations' | 'none'
 
 const LS_KEY_PROVIDER = 'guiago-tts-provider'
 const LS_KEY_OPENAI = 'guiago-openai-tts-key'
@@ -38,12 +38,11 @@ const LS_KEY_VOICE_EN = 'guiago-tts-voice-en'
 // ---------------------------------------------------------------------------
 
 export function getProvider(): NeuralProviderId {
-  const stored = localStorage.getItem(LS_KEY_PROVIDER) as NeuralProviderId | null
-  if (stored === 'openai' || stored === 'streamelements' || stored === 'none') return stored
-  // Default: StreamElements (free, no key required, fixes the iOS lock-screen
-  // bug, sounds dramatically better than Web Speech). Users can switch to
-  // OpenAI in settings for premium quality, or 'none' to keep Web Speech.
-  return 'streamelements'
+  const stored = localStorage.getItem(LS_KEY_PROVIDER) as string | null
+  if (stored === 'openai' || stored === 'pollinations' || stored === 'none') return stored
+  // 'streamelements' (old default) migrated to 'pollinations': SE started
+  // returning 403 to browser requests, which made the guide silently mute.
+  return 'pollinations'
 }
 
 export function setProvider(id: NeuralProviderId): void {
@@ -59,21 +58,24 @@ export function setOpenAIKey(key: string): void {
 }
 
 // Voice catalogues — kept small so the picker stays usable on a phone.
-export const STREAMELEMENTS_VOICES: Record<'es' | 'en', { id: string; label: string }[]> = {
+// Pollinations proxies OpenAI's audio voices for free (no key), so both
+// providers share the same voice ids.
+export const POLLINATIONS_VOICES: Record<'es' | 'en', { id: string; label: string }[]> = {
   es: [
-    { id: 'Lupe', label: 'Lupe (mujer · cálida)' },
-    { id: 'Mia', label: 'Mia (mujer · joven)' },
-    { id: 'Penelope', label: 'Penélope (mujer · neutra)' },
-    { id: 'Conchita', label: 'Conchita (mujer · clásica)' },
-    { id: 'Enrique', label: 'Enrique (hombre · grave)' },
-    { id: 'Miguel', label: 'Miguel (hombre · neutro)' },
+    { id: 'nova', label: 'Nova (mujer · cálida)' },
+    { id: 'shimmer', label: 'Shimmer (mujer · clara)' },
+    { id: 'alloy', label: 'Alloy (neutra)' },
+    { id: 'onyx', label: 'Onyx (hombre · grave)' },
+    { id: 'echo', label: 'Echo (hombre · neutro)' },
+    { id: 'fable', label: 'Fable (narrador)' },
   ],
   en: [
-    { id: 'Brian', label: 'Brian (man · UK)' },
-    { id: 'Joanna', label: 'Joanna (woman · US)' },
-    { id: 'Salli', label: 'Salli (woman · US)' },
-    { id: 'Matthew', label: 'Matthew (man · US)' },
-    { id: 'Amy', label: 'Amy (woman · UK)' },
+    { id: 'nova', label: 'Nova (woman · warm)' },
+    { id: 'shimmer', label: 'Shimmer (woman · clear)' },
+    { id: 'alloy', label: 'Alloy (neutral)' },
+    { id: 'onyx', label: 'Onyx (man · deep)' },
+    { id: 'echo', label: 'Echo (man · neutral)' },
+    { id: 'fable', label: 'Fable (storyteller)' },
   ],
 }
 
@@ -94,12 +96,15 @@ export const OPENAI_VOICES: Record<'es' | 'en', { id: string; label: string }[]>
   ],
 }
 
+const VALID_VOICES = new Set(['nova', 'shimmer', 'alloy', 'onyx', 'echo', 'fable'])
+
 export function getVoice(lang: 'es' | 'en'): string {
   const key = lang === 'es' ? LS_KEY_VOICE_ES : LS_KEY_VOICE_EN
   const stored = localStorage.getItem(key)
-  if (stored) return stored
-  // Sensible defaults per provider
-  return getProvider() === 'openai' ? 'nova' : (lang === 'es' ? 'Lupe' : 'Brian')
+  // Old StreamElements voice names (Lupe, Brian…) are invalid for the
+  // OpenAI-style providers — silently reset them to the default.
+  if (stored && VALID_VOICES.has(stored)) return stored
+  return 'nova'
 }
 
 export function setVoice(lang: 'es' | 'en', voice: string): void {
@@ -111,10 +116,37 @@ export function setVoice(lang: 'es' | 'en', voice: string): void {
 // Synthesis
 // ---------------------------------------------------------------------------
 
-// Conservative chunk size: StreamElements rejects >550 chars; OpenAI accepts
-// up to 4096 but smaller chunks parallelise better and start playing sooner.
-const STREAMELEMENTS_MAX = 500
+// Chunk sizes: Pollinations carries the text in the URL (keep well under
+// URL-length limits); OpenAI accepts up to 4096 chars but smaller chunks
+// parallelise better and start playing sooner.
+const POLLINATIONS_MAX = 700
 const OPENAI_MAX = 1500
+
+// Every TTS fetch gets a hard timeout so a hanging provider can never leave
+// the guide silently "buffering" forever — the caller falls back to Web
+// Speech instead.
+const FETCH_TIMEOUT_MS = 20000
+
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Throws unless the response actually contains audio (providers sometimes
+ *  return 200 + an HTML/text error page, which would "play" as silence). */
+async function audioBlobOrThrow(resp: Response, provider: string): Promise<Blob> {
+  if (!resp.ok) throw new Error(`${provider} HTTP ${resp.status}`)
+  const type = resp.headers.get('content-type') || ''
+  const blob = await resp.blob()
+  const looksAudio = type.startsWith('audio/') || type === 'application/octet-stream' || blob.type.startsWith('audio/')
+  if (!looksAudio || blob.size < 1000) throw new Error(`${provider} returned non-audio (${type}, ${blob.size}B)`)
+  return blob
+}
 
 /** Splits text into sentence-aligned chunks under the provider's char limit. */
 export function chunkText(text: string, maxChars: number): string[] {
@@ -145,19 +177,21 @@ export function chunkText(text: string, maxChars: number): string[] {
   return out.filter(Boolean)
 }
 
-async function fetchStreamElements(text: string, lang: 'es' | 'en'): Promise<Blob> {
+async function fetchPollinations(text: string, lang: 'es' | 'en'): Promise<Blob> {
   const voice = getVoice(lang)
-  const url = `https://api.streamelements.com/kappa/v2/speech?voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(text)}`
-  const resp = await fetch(url)
-  if (!resp.ok) throw new Error(`StreamElements ${resp.status}`)
-  return resp.blob()
+  // Pollinations openai-audio: GET with the text in the path returns MP3.
+  // No key, no account, CORS-enabled — same provider the app already uses
+  // for text generation.
+  const url = `https://text.pollinations.ai/${encodeURIComponent(text)}?model=openai-audio&voice=${encodeURIComponent(voice)}`
+  const resp = await fetchWithTimeout(url)
+  return audioBlobOrThrow(resp, 'Pollinations')
 }
 
 async function fetchOpenAI(text: string, lang: 'es' | 'en'): Promise<Blob> {
   const key = getOpenAIKey()
   if (!key) throw new Error('OpenAI TTS key missing')
   const voice = getVoice(lang)
-  const resp = await fetch('https://api.openai.com/v1/audio/speech', {
+  const resp = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -170,8 +204,7 @@ async function fetchOpenAI(text: string, lang: 'es' | 'en'): Promise<Blob> {
       response_format: 'mp3',
     }),
   })
-  if (!resp.ok) throw new Error(`OpenAI TTS ${resp.status}`)
-  return resp.blob()
+  return audioBlobOrThrow(resp, 'OpenAI TTS')
 }
 
 /** Cache key includes provider+voice so changing voice in settings re-renders. */
@@ -196,10 +229,10 @@ export async function synthesize(
   const provider = getProvider()
   if (provider === 'none' || !text.trim()) return null
 
-  const maxChars = provider === 'openai' ? OPENAI_MAX : STREAMELEMENTS_MAX
+  const maxChars = provider === 'openai' ? OPENAI_MAX : POLLINATIONS_MAX
   const chunks = chunkText(text, maxChars)
 
-  const fetcher = provider === 'openai' ? fetchOpenAI : fetchStreamElements
+  const fetcher = provider === 'openai' ? fetchOpenAI : fetchPollinations
 
   const blobs = await Promise.all(chunks.map(async (chunk, i) => {
     const key = blobKey(poiId, lang, i, provider)
@@ -216,7 +249,9 @@ export async function synthesize(
   }))
 
   const ok = blobs.filter((b): b is Blob => !!b)
-  return ok.length > 0 ? ok : null
+  // All-or-nothing: a missing chunk would leave a hole mid-narration, which
+  // is worse than falling back to a complete Web Speech reading.
+  return ok.length === chunks.length && ok.length > 0 ? ok : null
 }
 
 /** True when a neural provider is configured (used to choose the audio path). */
@@ -231,6 +266,6 @@ export function isNeuralActive(): boolean {
 export function getProviderLabel(): string {
   const p = getProvider()
   if (p === 'openai') return 'OpenAI TTS · Neuronal'
-  if (p === 'streamelements') return 'StreamElements · Neuronal'
+  if (p === 'pollinations') return 'Voz neuronal · gratis'
   return 'Web Speech (Siri)'
 }

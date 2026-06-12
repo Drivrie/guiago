@@ -40,9 +40,12 @@ function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): num
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-/** Single-language Wikipedia geosearch with thumbnails + short descriptions. */
-async function wikiNearby(
-  lat: number, lon: number, radiusM: number, wikiLang: string
+/** Single-language MediaWiki geosearch with thumbnails + short descriptions.
+ *  Works for both Wikipedia and Wikivoyage (same API shape). Wikivoyage's
+ *  geo-tagged pages are PURE travel listings — exactly the tourist-guide
+ *  perspective the discovery list needs. */
+async function mediaWikiNearby(
+  lat: number, lon: number, radiusM: number, host: string
 ): Promise<NearbyPlace[]> {
   try {
     const params = new URLSearchParams({
@@ -60,7 +63,7 @@ async function wikiNearby(
       format: 'json',
       origin: '*',
     })
-    const resp = await fetch(`https://${wikiLang}.wikipedia.org/w/api.php?${params}`)
+    const resp = await fetch(`https://${host}/w/api.php?${params}`)
     if (!resp.ok) return []
     const data = await resp.json() as {
       query?: {
@@ -109,8 +112,12 @@ export async function findNearbyPlaces(
   if (local && !langs.includes(local)) langs.push(local)
   if (!langs.includes('en')) langs.push('en')
 
-  const [wikiLists, osmList] = await Promise.all([
-    Promise.all(langs.map(l => wikiNearby(lat, lon, radiusM, l))),
+  const [wikiLists, voyageLists, osmList] = await Promise.all([
+    Promise.all(langs.map(l => mediaWikiNearby(lat, lon, radiusM, `${l}.wikipedia.org`))),
+    // Wikivoyage: only the app language + English exist with useful coverage.
+    Promise.all([lang === 'es' ? 'es' : 'en', 'en']
+      .filter((v, i, arr) => arr.indexOf(v) === i)
+      .map(l => mediaWikiNearby(lat, lon, radiusM, `${l}.wikivoyage.org`))),
     searchPOIsNearby(lat, lon, radiusM).catch(() => []),
   ])
 
@@ -139,7 +146,15 @@ export async function findNearbyPlaces(
   }
 
   for (const list of wikiLists) for (const p of list) pushUnique(p)
+  for (const list of voyageLists) for (const p of list) pushUnique(p)
+
+  // Defensive business filter: even with the tightened Overpass query, any
+  // plain food/retail entry that sneaks in (e.g. via a wikipedia tag on a
+  // franchise) is dropped — the discovery list is a TOURIST guide, not a
+  // directory of places to eat.
+  const BUSINESS_RE = /restaurante?|cafeter[ií]a|cafe\b|bar\b|pub\b|fast_food|food_court|supermercado|supermarket|tienda|shop|hotel|hostal|hostel|farmacia|pharmacy|banco|bank\b/i
   for (const p of osmList) {
+    if (BUSINESS_RE.test(p.category) || BUSINESS_RE.test(p.name)) continue
     pushUnique({
       name: p.name,
       lat: p.lat,

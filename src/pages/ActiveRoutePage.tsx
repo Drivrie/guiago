@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { MapView } from '../components/MapView'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { OfflineDownload } from '../components/OfflineDownload'
@@ -29,6 +29,10 @@ type GuidePhase =
   | 'complete'
 
 type NavMode = 'app' | 'external'
+
+// Survives component unmount (client-side navigation to /route/preview and
+// back) so "Continuar guiado" can restore the tour in the same mode.
+let lastNavMode: NavMode | null = null
 
 function fallbackSegment(from: POI, to: POI): RouteSegment {
   const direct = getDirectRoute(from, to)
@@ -68,14 +72,23 @@ function googleFullRouteUrl(
 
 export function ActiveRoutePage() {
   const navigate = useNavigate()
+  const routerLocation = useLocation()
   const {
     language, currentRoute, pois, currentPOIIndex, setCurrentPOIIndex,
     setPOIs, setRoute, anthropicApiKey, markPOIsVisited,
     userLocation: globalUserLocation, setUserLocation: setGlobalUserLocation
   } = useAppStore()
 
-  const [phase, setPhase] = useState<GuidePhase>('selecting_mode')
-  const [navMode, setNavMode] = useState<NavMode | null>(null)
+  // Resume support: when the user peeked at the route summary mid-tour and
+  // tapped "Continuar guiado", we re-enter directly at the current stop
+  // (in the SAME nav mode they were using) instead of forcing them back
+  // through the mode-selection screens. `lastNavMode` is module-level so it
+  // survives the client-side round-trip to /route/preview.
+  const resumeRequested = (routerLocation.state as { resume?: boolean } | null)?.resume === true
+  const canResume = resumeRequested && lastNavMode !== null
+  const [phase, setPhase] = useState<GuidePhase>(() => (canResume ? 'at_poi' : 'selecting_mode'))
+  const [navMode, setNavModeState] = useState<NavMode | null>(() => (canResume ? lastNavMode : null))
+  const setNavMode = (m: NavMode | null) => { lastNavMode = m; setNavModeState(m) }
   const [userLocation, setUserLocation] = useState<[number, number] | null>(globalUserLocation)
   const [audioScript, setAudioScript] = useState('')
   const [audioLoading, setAudioLoading] = useState(false)
@@ -1123,6 +1136,13 @@ export function ActiveRoutePage() {
             </p>
           </div>
           <button
+            onClick={() => { stopTTS(); navigate('/route/preview', { state: { fromTour: true } }) }}
+            className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
+            aria-label={language === 'es' ? 'Resumen de la ruta' : 'Route summary'}
+          >
+            <span className="text-base">📋</span>
+          </button>
+          <button
             onClick={() => setShowDownload(true)}
             className="w-9 h-9 bg-stone-800 rounded-xl flex items-center justify-center text-stone-300"
           >
@@ -1389,6 +1409,15 @@ export function ActiveRoutePage() {
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
+          </button>
+
+          {/* Route summary: jump to the preview/overview screen at any point */}
+          <button
+            onClick={() => { stopTTS(); navigate('/route/preview', { state: { fromTour: true } }) }}
+            className="absolute top-[max(0.75rem,env(safe-area-inset-top))] left-16 w-10 h-10 bg-black/30 backdrop-blur-sm rounded-xl flex items-center justify-center text-white"
+            aria-label={language === 'es' ? 'Ver resumen de la ruta' : 'View route summary'}
+          >
+            <span className="text-base">📋</span>
           </button>
 
           {/* Stop number */}

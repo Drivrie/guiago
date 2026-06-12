@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../stores/appStore'
 import { Button } from '../components/ui/Button'
 import { MapView } from '../components/MapView'
@@ -27,8 +27,12 @@ import type { POI } from '../types'
  */
 export function RoutePreviewPage() {
   const navigate = useNavigate()
-  const { language, currentRoute, pois, setPOIs, setRoute, setCurrentPOIIndex, anthropicApiKey } = useAppStore()
+  const routerLocation = useLocation()
+  const { language, currentRoute, pois, setPOIs, setRoute, setCurrentPOIIndex, currentPOIIndex, anthropicApiKey } = useAppStore()
   const es = language === 'es'
+  // Arrived here mid-tour (📋 button)? Then the primary action is to RESUME
+  // the guidance at the current stop, not restart from scratch.
+  const fromTour = (routerLocation.state as { fromTour?: boolean } | null)?.fromTour === true
 
   // Only ONE narration panel expanded at a time so we never overlap audio.
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -279,11 +283,31 @@ export function RoutePreviewPage() {
         </div>
       </div>
 
-      {/* Start button (fixed bottom) */}
+      {/* Start / resume buttons (fixed bottom) */}
       <div className="fixed bottom-0 left-0 right-0 p-5 bg-white/95 backdrop-blur-sm border-t border-stone-100 safe-bottom">
-        <Button fullWidth size="lg" onClick={startTour}>
-          {es ? '▶ Empezar la ruta' : '▶ Start the tour'}
-        </Button>
+        {fromTour ? (
+          <div className="space-y-2">
+            <Button
+              fullWidth
+              size="lg"
+              onClick={() => navigate('/route/active', { state: { resume: true } })}
+            >
+              {es
+                ? `▶ Continuar guiado (parada ${Math.min(currentPOIIndex + 1, pois.length)} de ${pois.length})`
+                : `▶ Resume guidance (stop ${Math.min(currentPOIIndex + 1, pois.length)} of ${pois.length})`}
+            </Button>
+            <button
+              onClick={startTour}
+              className="w-full text-center text-stone-500 text-sm py-2 underline underline-offset-2"
+            >
+              {es ? '↻ Empezar desde el principio' : '↻ Restart from the beginning'}
+            </button>
+          </div>
+        ) : (
+          <Button fullWidth size="lg" onClick={startTour}>
+            {es ? '▶ Empezar la ruta' : '▶ Start the tour'}
+          </Button>
+        )}
       </div>
     </div>
   )

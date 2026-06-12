@@ -4,11 +4,12 @@ import {
   getProvider, setProvider,
   getOpenAIKey, setOpenAIKey,
   getVoice, setVoice,
-  STREAMELEMENTS_VOICES, OPENAI_VOICES,
+  POLLINATIONS_VOICES, OPENAI_VOICES,
   synthesize,
   type NeuralProviderId,
 } from '../services/neuralTTS'
 import * as audioPlayback from '../services/audioPlayback'
+import { speak } from '../services/tts'
 
 export function VoiceSettings() {
   const { language } = useAppStore()
@@ -20,14 +21,13 @@ export function VoiceSettings() {
   const [openaiKey, setOpenaiKeyLocal] = useState(() => getOpenAIKey())
   const [showKey, setShowKey] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  const [previewError, setPreviewError] = useState(false)
 
   function applyProvider(p: NeuralProviderId) {
     setProvider(p)
     setLocalProvider(p)
-    // Reset voice to default for the new provider
-    const next = p === 'openai' ? 'nova' : (lang === 'es' ? 'Lupe' : 'Brian')
-    setVoice(lang, next)
-    setLocalVoice(next)
+    setVoice(lang, 'nova') // both neural providers share OpenAI-style voices
+    setLocalVoice('nova')
   }
 
   function applyVoice(v: string) {
@@ -41,21 +41,29 @@ export function VoiceSettings() {
 
   async function preview() {
     setPreviewing(true)
+    setPreviewError(false)
     audioPlayback.stop()
+    // Unlock the shared <audio> element SYNCHRONOUSLY inside this tap —
+    // without it, iOS rejects the play() that happens after the async fetch
+    // and the preview is silently mute.
+    audioPlayback.unlock()
     const sample = es
       ? 'Hola, soy tu guía. Tienes delante uno de los lugares más fascinantes de la ciudad. Acompáñame.'
       : 'Hi, I\'m your guide. You\'re standing in front of one of the most fascinating places in the city. Come with me.'
     try {
-      const blobs = await synthesize(sample, lang, 'preview-sample')
+      const blobs = await synthesize(sample, lang, `preview-${voice}`)
       if (blobs) {
         audioPlayback.play(blobs, { rate: 1.0, onEnd: () => setPreviewing(false) })
         return
       }
     } catch (err) { console.warn('[VoiceSettings] preview failed:', err) }
-    setPreviewing(false)
+    // Neural failed → make the failure AUDIBLE and VISIBLE instead of silent:
+    // play the sample with the system voice and show a notice.
+    setPreviewError(true)
+    speak(sample, es ? 'es-ES' : 'en-US', { onEnd: () => setPreviewing(false) })
   }
 
-  const voices = provider === 'openai' ? OPENAI_VOICES[lang] : STREAMELEMENTS_VOICES[lang]
+  const voices = provider === 'openai' ? OPENAI_VOICES[lang] : POLLINATIONS_VOICES[lang]
   const needsKey = provider === 'openai' && !getOpenAIKey()
 
   return (
@@ -72,7 +80,7 @@ export function VoiceSettings() {
 
         <div className="grid grid-cols-1 gap-2">
           {([
-            { id: 'streamelements' as NeuralProviderId, name: es ? 'Neuronal gratis (recomendada)' : 'Neural free (recommended)', sub: es ? 'Sin cuenta, voces realistas, sobrevive a pantalla bloqueada' : 'No account, realistic voices, survives screen lock', badge: '✨' },
+            { id: 'pollinations' as NeuralProviderId, name: es ? 'Neuronal gratis (recomendada)' : 'Neural free (recommended)', sub: es ? 'Sin cuenta, voces realistas, sobrevive a pantalla bloqueada' : 'No account, realistic voices, survives screen lock', badge: '✨' },
             { id: 'openai' as NeuralProviderId, name: es ? 'OpenAI · Premium' : 'OpenAI · Premium', sub: es ? 'Calidad cinematográfica · Requiere clave propia' : 'Cinematic quality · Bring your own key', badge: '🎙️' },
             { id: 'none' as NeuralProviderId, name: es ? 'Voz del sistema (Siri)' : 'System voice (Siri)', sub: es ? 'Sin red, pero se corta al bloquear el iPhone' : 'No network, but stops when you lock the iPhone', badge: '📱' },
           ]).map(opt => (
@@ -141,6 +149,13 @@ export function VoiceSettings() {
           >
             {previewing ? (es ? 'Reproduciendo…' : 'Playing…') : (es ? '▶ Probar voz' : '▶ Preview voice')}
           </button>
+          {previewError && (
+            <p className="mt-2 text-xs text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
+              {es
+                ? '⚠️ La voz neuronal no respondió — has oído la voz del sistema. Comprueba tu conexión; durante las rutas el guía usará la neuronal cuando esté disponible y Siri como respaldo.'
+                : '⚠️ The neural voice did not respond — you heard the system voice. Check your connection; during tours the guide uses neural when available, Siri as backup.'}
+            </p>
+          )}
         </div>
       )}
     </div>
