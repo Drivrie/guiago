@@ -35,6 +35,11 @@ jobs:
 
       - name: Build
         run: yarn build
+        env:
+          # Built-in AI key for every user of the published app (Settings → Secrets and
+          # variables → Actions → VITE_MISTRAL_KEY). Without it the app only has the
+          # anonymous Pollinations fallback, which now requires a key.
+          VITE_MISTRAL_KEY: ${{ secrets.VITE_MISTRAL_KEY }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

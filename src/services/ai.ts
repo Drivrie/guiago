@@ -1,5 +1,6 @@
 import type { RouteType, Language } from '../types'
 import { getActiveLocalModel, isLocalModelLoaded, callLocalModel } from './localAI'
+import { getPollinationsKey } from './neuralTTS'
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -192,6 +193,29 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 // ---------------------------------------------------------------------------
 
 async function callPollinations(system: string, user: string): Promise<string> {
+  // Since 2026 Pollinations requires a key: use the current OpenAI-compatible endpoint with
+  // the visitor's own key (same key as the neural voice). The legacy anonymous endpoint is
+  // kept as a last attempt.
+  const pollinationsKey = getPollinationsKey()
+  if (pollinationsKey) {
+    const resp = await withTimeout(fetch('https://gen.pollinations.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${pollinationsKey}` },
+      body: JSON.stringify({
+        model: 'openai',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    }), 30000)
+    if (resp.ok) {
+      const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> }
+      const content = data.choices?.[0]?.message?.content?.trim()
+      if (content) return content
+    }
+    console.warn('[AI] Pollinations (key) failed:', resp.status)
+  }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 30000)
   const resp = await fetch(POLLINATIONS_API, {

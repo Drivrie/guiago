@@ -48,7 +48,12 @@ export async function announce(text: string, lang: Language, opts: AnnounceOptio
       speak(text, lang === 'es' ? 'es-ES' : 'en-US', { rate: 1.05, onEnd: opts.onEnd })
       return
     }
-    audioPlayback.play(blobs, { rate: 1.05, poi: opts.poi, onEnd: opts.onEnd })
+    audioPlayback.play(blobs, {
+      rate: 1.05,
+      poi: opts.poi,
+      onEnd: opts.onEnd,
+      onFail: () => speak(text, lang === 'es' ? 'es-ES' : 'en-US', { rate: 1.05, onEnd: opts.onEnd }),
+    })
   } catch (err) {
     console.warn('[announce] neural failed, falling back to Web Speech:', err)
     speak(text, lang === 'es' ? 'es-ES' : 'en-US', { rate: 1.05, onEnd: opts.onEnd })

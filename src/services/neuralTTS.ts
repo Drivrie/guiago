@@ -19,9 +19,11 @@
 //
 // Provider order, all transparent to the caller:
 //   - 'openai'         user-pasted OpenAI key → tts-1 (premium, ~$0.015/1k)
-//   - 'streamelements' free, no key, decent neural voices (default)
-//   - 'none'           neural TTS disabled → caller should fall back to
-//                       Web Speech (existing behaviour)
+//   - 'pollinations'   (default) with a personal Pollinations key → neural voices;
+//                       without a key → Google Translate's basic voice
+//   - 'none'           neural TTS disabled → Web Speech (system voice)
+// If nothing can be played, audioPlayback reports onFail and callers fall back to
+// Web Speech, so the guide is never silent.
 // ---------------------------------------------------------------------------
 
 import { saveAudioBlob, getAudioBlob } from './storage'
@@ -31,6 +33,7 @@ export type NeuralProviderId = 'openai' | 'pollinations' | 'none'
 
 const LS_KEY_PROVIDER = 'guiago-tts-provider'
 const LS_KEY_OPENAI = 'guiago-openai-tts-key'
+const LS_KEY_POLLINATIONS = 'guiago-pollinations-key'
 const LS_KEY_VOICE_ES = 'guiago-tts-voice-es'
 const LS_KEY_VOICE_EN = 'guiago-tts-voice-en'
 
@@ -56,6 +59,17 @@ export function getOpenAIKey(): string {
 
 export function setOpenAIKey(key: string): void {
   localStorage.setItem(LS_KEY_OPENAI, key.trim())
+}
+
+/** Personal Pollinations key (enter.pollinations.ai). Since 2026 Pollinations requires a
+ *  key for every generation endpoint: without one its voice is not available. The same key
+ *  also unlocks Pollinations text generation for the AI guide (see ai.ts). */
+export function getPollinationsKey(): string {
+  return localStorage.getItem(LS_KEY_POLLINATIONS) || ''
+}
+
+export function setPollinationsKey(key: string): void {
+  localStorage.setItem(LS_KEY_POLLINATIONS, key.trim())
 }
 
 // Voice catalogues — kept small so the picker stays usable on a phone.
@@ -180,10 +194,11 @@ export function chunkText(text: string, maxChars: number): string[] {
 
 async function fetchPollinations(text: string, lang: 'es' | 'en'): Promise<Blob> {
   const voice = getVoice(lang)
-  // Pollinations openai-audio: GET with the text in the path returns MP3.
-  // No key, no account, CORS-enabled — same provider the app already uses
-  // for text generation.
-  const url = `https://text.pollinations.ai/${encodeURIComponent(text)}?model=openai-audio&voice=${encodeURIComponent(voice)}`
+  const key = getPollinationsKey()
+  if (!key) throw new Error('falta la clave de Pollinations')
+  // Current API (gen.pollinations.ai): GET /audio/{text} returns MP3. The key goes in the
+  // query string — the documented way for audio GET endpoints.
+  const url = `https://gen.pollinations.ai/audio/${encodeURIComponent(text)}?voice=${encodeURIComponent(voice)}&key=${encodeURIComponent(key)}`
   const resp = await fetchWithTimeout(url)
   return audioBlobOrThrow(resp, 'Pollinations')
 }
@@ -261,7 +276,9 @@ export async function synthesize(
   // long narrations but the first chunk starts playing as soon as the whole
   // set resolves, and most chunks come from the IndexedDB cache anyway.
   const out: PlayableChunk[] = []
-  let pollinationsDown = false
+  // Without a key Pollinations always refuses: go straight to the keyless fallback
+  let pollinationsDown = !getPollinationsKey()
+  if (pollinationsDown && !isOpenAI) errorReasons.push('Pollinations: falta la clave (voz básica de Google en su lugar)')
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i]
@@ -332,6 +349,6 @@ export function isNeuralActive(): boolean {
 export function getProviderLabel(): string {
   const p = getProvider()
   if (p === 'openai') return 'OpenAI TTS · Neuronal'
-  if (p === 'pollinations') return 'Voz neuronal · gratis'
+  if (p === 'pollinations') return getPollinationsKey() ? 'Voz neuronal · Pollinations' : 'Voz neuronal básica · Google'
   return 'Web Speech (Siri)'
 }
