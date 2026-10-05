@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Route } from '../types'
 import { saveRoute, saveAudioScript, savePOIDescription, getStorageEstimate, estimateRouteStorage } from '../services/storage'
-import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
+import { getNarrationText, generateAudioScript } from '../services/wikipedia'
 import { synthesize, isNeuralActive } from '../services/neuralTTS'
 import { useAppStore } from '../stores/appStore'
 import { Button } from './ui/Button'
@@ -40,8 +40,9 @@ export function OfflineDownload({ route, onComplete }: OfflineDownloadProps) {
       let completed = 0
 
       for (const poi of route.pois) {
-        // Fetch Wikipedia description
-        const desc = await getPOIDescription(poi.name, language)
+        // Facts about this exact place, only if readable in the app language
+        const facts = await getNarrationText(poi, language)
+        const desc = (!facts.lang || facts.lang === language ? facts.text : '') || poi.tags?.userNotes || ''
         if (desc) {
           await savePOIDescription(poi.id, desc, language)
           const audioScript = generateAudioScript({ name: poi.name, category: poi.category, description: desc }, language)

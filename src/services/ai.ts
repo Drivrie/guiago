@@ -364,14 +364,111 @@ Exact JSON (no text outside the JSON):
 
   try {
     const text = await callAI(system, user, getAIKey(userKey), 2800)
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return null
-    const result = JSON.parse(jsonMatch[0]) as AIRouteResult
+    const result = parseJSONObject<AIRouteResult>(text)
+    if (!result) return null
     // Basic validation
     if (!result.suggestedPOIs || !Array.isArray(result.suggestedPOIs)) return null
     return result
   } catch (err) {
     console.error('AI route generation error:', err)
+    return null
+  }
+}
+
+export interface AIItineraryStop {
+  name: string
+  searchName?: string | null
+  notes?: string | null
+  visitMinutes?: number | null
+}
+
+export interface AIItinerary {
+  city?: string | null
+  country?: string | null
+  title?: string | null
+  intro?: string | null
+  stops: AIItineraryStop[]
+}
+
+/** Parses a JSON object out of an LLM reply (tolerates code fences and surrounding prose). */
+function parseJSONObject<T>(text: string): T | null {
+  const cleaned = text.replace(/```(?:json)?/gi, '')
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1)) as T
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Extracts a walking itinerary from free text (blog post, travel guide, notes, a friend's
+ * message…). Only places mentioned in the text are returned, in the order they appear.
+ */
+export async function extractItineraryFromText(
+  text: string,
+  lang: Language,
+  userKey: string
+): Promise<AIItinerary | null> {
+  const input = text.trim().slice(0, 6000)
+  if (!input) return null
+
+  const system = lang === 'es'
+    ? 'Eres un asistente que extrae itinerarios turísticos de textos libres. Nunca inventas lugares: solo usas los que aparecen en el texto. Respondes exclusivamente con JSON válido, sin markdown.'
+    : 'You extract sightseeing itineraries from free text. You never invent places: you only use those mentioned in the text. You reply exclusively with valid JSON, no markdown.'
+
+  const user = lang === 'es'
+    ? `Extrae el recorrido del siguiente texto.
+
+REGLAS:
+1. Incluye SOLO lugares concretos y visitables nombrados en el texto (monumentos, iglesias, plazas, museos, calles con interés, miradores, mercados, bares o restaurantes con nombre…), en el MISMO ORDEN en que aparecen.
+2. Ignora menciones genéricas sin nombre propio ("el hotel", "comer", "tiempo libre", "la estación") y lugares fuera de la ciudad del recorrido.
+3. "name": el nombre tal como aparece en el texto. "searchName": el nombre oficial o local con el que se encuentra en Wikipedia u OpenStreetMap (en el idioma del país), o el mismo nombre si no lo sabes.
+4. "notes": lo que el texto dice o recomienda sobre esa parada, resumido en 1-2 frases en español. null si el texto no dice nada.
+5. "visitMinutes": minutos de visita si el texto lo indica, si no null.
+6. "city" y "country": dónde transcurre el recorrido (dedúcelo del texto si es posible; null si no se puede saber).
+7. "title": un título corto para la ruta. "intro": 1-2 frases evocadoras que presenten el recorrido, basadas en el texto.
+8. Máximo 25 paradas. No dupliques lugares.
+
+TEXTO:
+"""
+${input}
+"""
+
+JSON exacto:
+{"city": "...", "country": "...", "title": "...", "intro": "...", "stops": [{"name": "...", "searchName": "...", "notes": "...", "visitMinutes": null}]}`
+    : `Extract the walking itinerary from the following text.
+
+RULES:
+1. Include ONLY concrete, visitable places named in the text (monuments, churches, squares, museums, notable streets, viewpoints, markets, named bars or restaurants…), in the SAME ORDER they appear.
+2. Ignore generic mentions without a proper name ("the hotel", "lunch", "free time", "the station") and places outside the route's city.
+3. "name": the name as written in the text. "searchName": the official or local name used on Wikipedia or OpenStreetMap (in the country's language), or the same name if unsure.
+4. "notes": what the text says or recommends about that stop, summarised in 1-2 sentences in English. null if the text says nothing.
+5. "visitMinutes": visit minutes if the text states them, otherwise null.
+6. "city" and "country": where the route takes place (infer from the text if possible; null if unknown).
+7. "title": a short title for the route. "intro": 1-2 evocative sentences introducing the route, based on the text.
+8. At most 25 stops. No duplicate places.
+
+TEXT:
+"""
+${input}
+"""
+
+Exact JSON:
+{"city": "...", "country": "...", "title": "...", "intro": "...", "stops": [{"name": "...", "searchName": "...", "notes": "...", "visitMinutes": null}]}`
+
+  try {
+    const reply = await callAI(system, user, getAIKey(userKey), 2000)
+    const result = parseJSONObject<AIItinerary>(reply)
+    if (!result || !Array.isArray(result.stops)) return null
+    result.stops = result.stops
+      .filter(s => s && typeof s.name === 'string' && s.name.trim().length >= 2)
+      .slice(0, 25)
+    return result
+  } catch (err) {
+    console.error('AI itinerary extraction error:', err)
     return null
   }
 }
@@ -410,7 +507,7 @@ export async function generateAIAudioScript(
     lang === 'es'
       ? `Genera la narración de audio AL LLEGAR a "${poiName}" (${category}).
 
-${wikiDescription ? `CONTEXTO HISTÓRICO VERIFICADO (extrae fechas, nombres y eventos concretos):\n${wikiDescription.slice(0, 2500)}` : ''}
+${wikiDescription ? `CONTEXTO HISTÓRICO VERIFICADO (extrae fechas, nombres y eventos concretos; puede estar en otro idioma — narra siempre en español):\n${wikiDescription.slice(0, 2500)}` : ''}
 ${reason ? `\nPor qué es especial en esta ruta: ${reason}` : ''}
 ${insiderTip ? `\nDato insider verificado: ${insiderTip}` : ''}
 ${styleHint ? `\n${styleHint}` : ''}
@@ -427,7 +524,7 @@ ESTRUCTURA OBLIGATORIA (siete bloques en este orden):
 LONGITUD: 320-420 palabras. Voz viva, apasionada, español de España, tuteo. Estilo Lonely Planet / Civitatis presencial. SOLO la narración, sin comillas, sin títulos, sin guiones, sin viñetas. Si los datos del contexto son escasos, sé conciso pero específico — no rellenes con tópicos ni inventes datos.`
       : `Generate audio narration ARRIVING AT "${poiName}" (${category}).
 
-${wikiDescription ? `VERIFIED HISTORICAL CONTEXT (extract concrete dates, names and events):\n${wikiDescription.slice(0, 2500)}` : ''}
+${wikiDescription ? `VERIFIED HISTORICAL CONTEXT (extract concrete dates, names and events; it may be in another language — always narrate in English):\n${wikiDescription.slice(0, 2500)}` : ''}
 ${reason ? `\nWhy it's special on this route: ${reason}` : ''}
 ${insiderTip ? `\nVerified insider tip: ${insiderTip}` : ''}
 ${styleHint ? `\n${styleHint}` : ''}

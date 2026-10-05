@@ -251,3 +251,84 @@ export async function getCityImageUrl(cityName: string): Promise<string | null> 
     return null
   }
 }
+
+// Nominatim usage policy: max 1 request per second. Calls reserve consecutive slots.
+let nextNominatimSlot = 0
+async function nominatimThrottle(): Promise<void> {
+  const slot = Math.max(Date.now(), nextNominatimSlot)
+  nextNominatimSlot = slot + 1100
+  const wait = slot - Date.now()
+  if (wait > 0) await new Promise(r => setTimeout(r, wait))
+}
+
+export interface NominatimPlace {
+  id: string
+  name: string
+  lat: number
+  lon: number
+  category: string
+  type: string
+  extratags: Record<string, string>
+}
+
+function cityViewbox(city: City): string {
+  if (city.boundingBox) {
+    const [minLat, maxLat, minLon, maxLon] = city.boundingBox
+    const latPad = Math.max((maxLat - minLat) * 0.25, 0.01)
+    const lonPad = Math.max((maxLon - minLon) * 0.25, 0.01)
+    return `${minLon - lonPad},${maxLat + latPad},${maxLon + lonPad},${minLat - latPad}`
+  }
+  const pad = 0.08
+  return `${city.lon - pad},${city.lat + pad},${city.lon + pad},${city.lat - pad}`
+}
+
+/**
+ * Finds a named place (monument, church, restaurant, square…) inside a city using OSM data.
+ * Covers places that have no Wikipedia article. Results are restricted to the city's area.
+ */
+export async function searchPlaceInCity(
+  name: string,
+  city: City,
+  lang: string = 'es'
+): Promise<NominatimPlace | null> {
+  const query = name.trim()
+  if (query.length < 2) return null
+  try {
+    await nominatimThrottle()
+    const params = new URLSearchParams({
+      q: query,
+      format: 'jsonv2',
+      limit: '5',
+      viewbox: cityViewbox(city),
+      bounded: '1',
+      extratags: '1',
+      'accept-language': lang,
+    })
+    const resp = await fetch(`${NOMINATIM_BASE}/search?${params}`)
+    if (!resp.ok) return null
+    const data = await resp.json() as Array<{
+      osm_type?: string; osm_id?: number
+      name?: string; display_name: string; lat: string; lon: string
+      category?: string; type?: string; importance?: number
+      extratags?: Record<string, string> | null
+    }>
+    // Skip whole administrative areas / streets when a proper place exists
+    const ranked = data
+      .filter(r => r.category !== 'boundary' && r.category !== 'place')
+      .sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0))
+    const best = ranked[0] ?? data.find(r => r.category === 'place' && r.type !== 'city' && r.type !== 'town')
+    if (!best) return null
+    return {
+      id: `osm-${best.osm_type || 'x'}-${best.osm_id ?? `${best.lat},${best.lon}`}`,
+      name: best.name || best.display_name.split(',')[0],
+      lat: parseFloat(best.lat),
+      lon: parseFloat(best.lon),
+      category: best.category || '',
+      type: best.type || '',
+      extratags: best.extratags || {},
+    }
+  } catch {
+    return null
+  }
+}
+

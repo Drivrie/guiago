@@ -10,8 +10,8 @@ import { searchCities } from '../services/nominatim'
 import { getCityDescription } from '../services/wikipedia'
 import { searchPOIsWikipedia, searchPOIByName } from '../services/wikigeo'
 import { generateAIRoute, hasAIKey, getAIKey } from '../services/ai'
-import { getRoute, getStepByStepInstructions, getDirectRoute, orderPOIsOptimally, fitRouteToTimeBudget, pruneOutlierPOIs } from '../services/routing'
-import type { Route, RouteType, RouteDuration, POI, RouteSegment } from '../types'
+import { buildRouteSegments, orderPOIsOptimally, fitRouteToTimeBudget, pruneOutlierPOIs } from '../services/routing'
+import type { Route, RouteType, RouteDuration, POI } from '../types'
 
 type TravelMode = 'walk' | 'transit'
 
@@ -155,6 +155,9 @@ export function RouteSetupPage() {
     try {
       let pois: POI[] = []
       let usedRouteType = selectedRouteType
+      // Local copy: React state set during this function is not readable until the next
+      // render, so `aiRouteStory` was always null when the route object was built.
+      let routeStory: string | null = null
 
       // ============================================================
       // STEP 1 — AI path: ask AI for curated POI suggestions
@@ -174,7 +177,8 @@ export function RouteSetupPage() {
         )
 
         if (aiResult && aiResult.suggestedPOIs.length > 0) {
-          setAiRouteStory(aiResult.routeStory)
+          routeStory = aiResult.routeStory || null
+          setAiRouteStory(routeStory)
 
           // Resolve each AI-suggested POI to real Wikipedia coordinates.
           // ALL lookups run in PARALLEL — sequentially this took 15-30 s
@@ -194,6 +198,8 @@ export function RouteSetupPage() {
             if (settled.status !== 'fulfilled') continue
             const { aiPOI, wikiPOI } = settled.value
             if (!wikiPOI) continue
+            // Two suggestions can resolve to the same place
+            if (resolvedPOIs.some(p => p.id === wikiPOI.id)) continue
             const distDeg = Math.sqrt(
               Math.pow(wikiPOI.lat - selectedCity.lat, 2) +
               Math.pow(wikiPOI.lon - selectedCity.lon, 2)
@@ -321,28 +327,9 @@ export function RouteSetupPage() {
 
       setLoading(true, language === 'es' ? 'Calculando ruta a pie...' : 'Calculating walking route...')
 
-      // Build OSRM segments — all legs fetched in PARALLEL (sequentially this
-      // added 1-2 s per stop; in parallel it costs one round-trip total).
-      // Order is preserved because we map over index pairs.
-      const segmentResults = await Promise.all(
-        pois.slice(0, -1).map(async (from, i) => {
-          const to = pois[i + 1]
-          try {
-            const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]], language)
-            if (result) {
-              const steps = getStepByStepInstructions(result)
-              return { from, to, steps, distance: result.distance, duration: result.duration, geometry: result.geometry.coordinates, real: true }
-            }
-          } catch { /* fall through to direct */ }
-          const direct = getDirectRoute(from, to)
-          const steps = getStepByStepInstructions(direct)
-          return { from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] as [number, number][], real: false }
-        })
-      )
-
-      const segments: RouteSegment[] = segmentResults.map(({ real: _real, ...seg }) => seg)
-      const totalDistance = segmentResults.reduce((sum, s) => sum + (s.real ? s.distance : 0), 0)
-      const totalDuration = segmentResults.reduce((sum, s) => sum + (s.real ? s.duration : 0), 0)
+      // Walking segments: one routing request for the whole route (one request per leg
+      // in parallel triggered rate limits on the public routing servers)
+      const { segments, totalDistance, totalDuration } = await buildRouteSegments(pois, language)
 
       const route: Route = {
         id: `${selectedCity.id}-${usedRouteType}-${Date.now()}`,
@@ -356,7 +343,7 @@ export function RouteSetupPage() {
         createdAt: new Date().toISOString(),
         language,
         isOffline: false,
-        story: aiRouteStory || undefined,
+        story: routeStory || undefined,
       }
 
       setRoute(route)

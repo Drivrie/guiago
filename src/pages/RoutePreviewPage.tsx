@@ -86,6 +86,8 @@ export function RoutePreviewPage() {
   // ----- Mutations -----
   function rebuildOrder(next: POI[]): POI[] {
     if (!currentRoute) return next
+    // Keep an order the visitor (or a pasted itinerary) chose; only drop the removed stop
+    if (currentRoute.preserveOrder) return next
     const ordered = orderPOIsOptimally(next, currentRoute.city.lat, currentRoute.city.lon)
     return pruneOutlierPOIs(ordered, 1500)
   }
@@ -110,7 +112,8 @@ export function RoutePreviewPage() {
     ;[next[idx - 1], next[idx]] = [next[idx], next[idx - 1]]
     // Skip rebuildOrder here: the visitor explicitly chose this order.
     setPOIs(next)
-    if (currentRoute) setRoute({ ...currentRoute, pois: next, segments: [] })
+    // preserveOrder: otherwise starting the tour re-optimised the order and undid this move
+    if (currentRoute) setRoute({ ...currentRoute, pois: next, segments: [], preserveOrder: true })
   }
 
   function moveDown(idx: number) {
@@ -118,7 +121,8 @@ export function RoutePreviewPage() {
     const next = [...pois]
     ;[next[idx], next[idx + 1]] = [next[idx + 1], next[idx]]
     setPOIs(next)
-    if (currentRoute) setRoute({ ...currentRoute, pois: next, segments: [] })
+    // preserveOrder: otherwise starting the tour re-optimised the order and undid this move
+    if (currentRoute) setRoute({ ...currentRoute, pois: next, segments: [], preserveOrder: true })
   }
 
   function startTour() {
@@ -137,7 +141,9 @@ export function RoutePreviewPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <h1 className="text-stone-900 font-black text-base truncate">{currentRoute.city.name}</h1>
+        <h1 className="text-stone-900 font-black text-base truncate">
+          {currentRoute.title ? `${currentRoute.title} — ${currentRoute.city.name}` : currentRoute.city.name}
+        </h1>
         <div className="w-10" />
       </div>
 

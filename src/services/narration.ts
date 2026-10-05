@@ -11,7 +11,7 @@
 //     still running, both callers await the same promise — no double work.
 // ---------------------------------------------------------------------------
 
-import { getPOIDescription, generateAudioScript } from './wikipedia'
+import { getNarrationText, generateAudioScript } from './wikipedia'
 import { getAudioScript, saveAudioScript } from './storage'
 import { generateAIAudioScript, hasAIKey, getAIKey } from './ai'
 import type { POI, Language } from '../types'
@@ -24,7 +24,7 @@ function flightKey(poi: POI, lang: Language): string {
 
 /**
  * Returns the narration script for a POI: persistent cache → in-flight
- * promise → fresh generation (Wikipedia+Wikivoyage context → AI narration →
+ * promise → fresh generation (facts about this exact place → AI narration →
  * template fallback). Generated scripts are persisted for replays/offline.
  */
 export async function buildNarration(poi: POI, lang: Language, userKey: string): Promise<string> {
@@ -36,15 +36,19 @@ export async function buildNarration(poi: POI, lang: Language, userKey: string):
   if (existing) return existing
 
   const promise = (async () => {
-    const desc = await getPOIDescription(poi.name, lang)
+    const facts = await getNarrationText(poi, lang)
+    // Notes from a pasted itinerary ("go at sunset", "look for the frog on the façade")
+    const userNotes = poi.tags?.userNotes || ''
+    const reason = [poi.shortDescription, userNotes].filter((v, i, a) => v && a.indexOf(v) === i).join(' ')
 
     let script: string | null = null
     if (hasAIKey(userKey)) {
+      // The AI narrates in the app language even when the source text is in another one
       script = await generateAIAudioScript(
         poi.name,
         poi.category,
-        desc || '',
-        poi.shortDescription || '',
+        facts.text,
+        reason,
         poi.tags?.['insiderTip'] || undefined,
         lang,
         getAIKey(userKey),
@@ -56,7 +60,8 @@ export async function buildNarration(poi: POI, lang: Language, userKey: string):
         {
           name: poi.name,
           category: poi.category,
-          description: desc || undefined,
+          // The template is read aloud as-is: never feed it text in another language
+          description: (!facts.lang || facts.lang === lang ? facts.text : '') || userNotes || undefined,
           insiderTip: poi.tags?.['insiderTip'] || undefined,
         },
         lang

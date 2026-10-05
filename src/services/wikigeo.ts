@@ -1,5 +1,6 @@
 import type { POI, RouteType, City, Language } from '../types'
 import { fetchSitelinksCounts } from './wikidata'
+import { searchPlaceInCity } from './nominatim'
 
 // Wikipedia API endpoints by language code. Beyond `es` and `en`, we dynamically
 // derive the local-language Wikipedia for the city's country to surface POIs
@@ -60,14 +61,23 @@ function wikiLangsForCity(city: City, lang: Language): string[] {
 // Keywords per route type for scoring Wikipedia articles — extended with
 // English / international terms so the geosearch works for any city.
 const ROUTE_KEYWORDS: Record<RouteType, RegExp> = {
-  imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|principal|basílica|castillo|torre|plaza mayor|famoso|turístico|cathedral|palace|castle|museum|monument|heritage|iconic|famous|landmark|basilica|tower|main square|historic|plaza|square|bridge|puente|gate|puerta|wall|muralla|temple|templo|market|mercado/i,
-  secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local|vecinos|cotidiano|alternativo|auténtico|escondido|peculiar|mercadillo|taberna|pasaje|patio|calleja|hidden|secret|local favourite|tucked away|quiet|backstreet|alley|courtyard|insider/i,
-  monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|real|alcazaba|mezquita|sinagoga|alhambra|fortaleza|cathedral|basilica|palace|castle|wall|tower|museum|monument|chapel|church|convent|abbey|royal|fort/i,
-  historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|fusilamiento|memorial|asesinato|tragedia|holocausto|peste|tortura|verdugo|brujas|judería|pogromo|cemetery|graveyard|inquisition|war|battle|massacre|execution|prison|jail|victims|firing squad|murder|tragedy|holocaust|plague|torture|witches|ghetto|pogrom|haunted|crime/i,
-  curiosidades: /fuente|estatua|escultura|leyenda|misterio|insólito|secreto|subterráneo|peculiar|curiosidad|raro|extraño|único|extraordinario|inusual|excéntrico|fountain|statue|sculpture|legend|mystery|unusual|peculiar|curiosity|odd|strange|unique|extraordinary|eccentric|smallest|oldest|narrowest|tallest|hidden|underground|mural|street art|graffiti|easter egg|quirky/i,
-  gastronomia: /mercado|gastronom|vino|tapas|cocina|taberna|bodega|feria|restaurante|jamón|queso|aceite|mariscos|tabernero|chef|chocolatería|pastelería|cervecería|sidrería|asador|denominación de origen|market|gastronom|wine|tapas|cuisine|tavern|winery|food fair|restaurant|ham|cheese|olive oil|seafood|brewery|chocolaterie|patisserie|cider house|grill|protected designation/i,
-  arquitectura: /arquitectura|barroco|gótico|renacimiento|mudéjar|modernismo|neoclásico|románico|art.*nouveau|estilo|fachada|claustro|cúpula|art déco|bauhaus|brutalismo|architecture|baroque|gothic|renaissance|moorish|modernism|neoclassical|romanesque|style|façade|facade|cloister|dome|art deco|brutalism/i,
-  naturaleza: /parque|jardín|río|arroyo|sierra|monte|playa|laguna|reserva|bosque|dehesa|marisma|huerta|alameda|cascada|lago|estanque|park|garden|river|stream|mountain|beach|lagoon|reserve|forest|woodland|marsh|waterfall|lake|pond|greenway|botanical/i,
+  imprescindibles: /catedral|palacio|alhambra|alcázar|mezquita|museo|monumento|patrimonio|unesco|emblemático|icónico|histórico|principal|basílica|castillo|torre|plaza mayor|famoso|turístico|cathedral|palace|castle|museum|monument|heritage|iconic|famous|landmark|basilica|tower|main square|historic|plaza|square|bridge|puente|gates?(?!\p{L})|puerta|walls?(?!\p{L})|muralla|temple|templo|market|mercado/iu,
+  secretos_locales: /barrio|rincón|secreto|oculto|poco conocido|local(?!\p{L})|vecinos|cotidiano|alternativo|auténtico|escondido|peculiar|mercadillo|taberna|pasaje|patio|calleja|hidden|secret|local favourite|tucked away|quiet|backstreet|alley|courtyard|insider/iu,
+  monumental: /catedral|basílica|palacio|castillo|muralla|alcázar|torre|museo|monumento|ermita|iglesia|convento|real(?!\p{L})|alcazaba|mezquita|sinagoga|alhambra|fortaleza|cathedral|basilica|palace|castle|walls?(?!\p{L})|tower|museum|monument|chapel|church|convent|abbey|royal|fort(?:ress)?(?!\p{L})/iu,
+  historia_negra: /cementerio|inquisición|guerra|batalla|matanza|ejecución|masacre|prisión|cárcel|víctimas|fusilamiento|memorial|asesinato|tragedia|holocausto|peste|tortura|verdugo|brujas|judería|pogromo|cemetery|graveyard|inquisition|wars?(?!\p{L})|battle|massacre|execution|prison|jail|victims|firing squad|murder|tragedy|holocaust|plague|torture|witches|ghetto|pogrom|haunted|crime/iu,
+  curiosidades: /fuente|estatua|escultura|leyenda|misterio|insólito|secreto|subterráneo|peculiar|curiosidad|raro|extraño|único|extraordinario|inusual|excéntrico|fountain|statue|sculpture|legend|mystery|unusual|peculiar|curiosity|odd(?!\p{L})|strange|unique|extraordinary|eccentric|smallest|oldest|narrowest|tallest|hidden|underground|mural|street art|graffiti|easter egg|quirky/iu,
+  gastronomia: /mercado|gastronom|vino|tapas|cocina|taberna|bodega|feria|restaurante|jamón|queso|aceite|mariscos|tabernero|chef|chocolatería|pastelería|cervecería|sidrería|asador|denominación de origen|market|gastronom|wine|tapas|cuisine|tavern|winery|food fair|restaurant|ham(?!\p{L})|cheese|olive oil|seafood|brewery|chocolaterie|patisserie|cider house|grill|protected designation/iu,
+  arquitectura: /arquitectura|barroco|gótico|renacimiento|mudéjar|modernismo|neoclásico|románico|art.*nouveau|estilo|fachada|claustro|cúpula|art déco|bauhaus|brutalismo|architecture|baroque|gothic|renaissance|moorish|modernism|neoclassical|romanesque|style|façade|facade|cloister|dome|art deco|brutalism/iu,
+  naturaleza: /parque|jardín|río|arroyo|sierra|monte|playa|laguna|reserva|bosque|dehesa|marisma|huerta|alameda|cascada|lago|estanque|park|garden|river|stream|mountain|beach|lagoon|reserve|forest|woodland|marsh|waterfall|lake|pond|greenway|botanical/iu,
+}
+
+/**
+ * Anchors every alternative of a keyword regex at the START of a word (Unicode-aware), so
+ * "war" no longer matches "Warsaw"/"toward", "ham" no longer matches "Birmingham" and
+ * "art" no longer matches "Bartolomé". Stems still match their inflections ("gastronom…").
+ */
+function wordStart(re: RegExp, flags = 'giu'): RegExp {
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])(?:${re.source})`, flags)
 }
 
 // Off-theme categories per route type — articles that obviously belong to a
@@ -94,7 +104,7 @@ const ALL_KEYWORDS_COMBINED = Object.entries(ROUTE_KEYWORDS)
   .filter(([k]) => k !== 'imprescindibles')
   .map(([, v]) => v.source)
   .join('|')
-const ALL_KEYWORDS_RE = new RegExp(ALL_KEYWORDS_COMBINED, 'gi')
+const ALL_KEYWORDS_RE = wordStart(new RegExp(ALL_KEYWORDS_COMBINED))
 
 function cleanHtml(html: string): string {
   return html
@@ -138,7 +148,7 @@ function scoreArticle(title: string, extract: string, routeType: RouteType): num
     return allMatches + notorietyBonus + heritageBonus + lengthBonus
   }
 
-  const re = new RegExp(ROUTE_KEYWORDS[routeType].source, 'gi')
+  const re = wordStart(ROUTE_KEYWORDS[routeType])
   const themeMatches = (text.match(re) || []).length
   if (themeMatches === 0) return 0   // THE GATE — drop everything off-theme
 
@@ -173,7 +183,7 @@ function guessVisitMinutes(title: string, extract: string): number {
   if (/castillo|castle|fortaleza|muralla/.test(t)) return 15
   if (/parque|jardín|park|garden/.test(t)) return 12
   if (/mercado|market/.test(t)) return 20
-  if (/restaurante|restaurant|taberna|tavern|bar|café|cafe/.test(t)) return 45
+  if (/restaurante|restaurant|taberna|tavern|\b(?:bar|pub)\b|café|cafe/.test(t)) return 45
   if (/plaza|square|piazza/.test(t)) return 10
   if (/puente|bridge|pont/.test(t)) return 8
   if (/iglesia|church|convento|monasterio|chapel/.test(t)) return 12
@@ -182,36 +192,104 @@ function guessVisitMinutes(title: string, extract: string): number {
   return 15
 }
 
-function guessCategory(title: string, extract: string, routeType: RouteType): string {
-  const t = `${title} ${extract.slice(0, 200)}`.toLowerCase()
-  if (/catedral|basílica/.test(t)) return 'catedral'
-  if (/mezquita/.test(t)) return 'mezquita'
-  if (/sinagoga/.test(t)) return 'sinagoga'
-  if (/iglesia|parroquia|ermita/.test(t)) return 'iglesia'
-  if (/convento|monasterio/.test(t)) return 'convento'
-  if (/palacio|alcázar|alhambra|alcazaba/.test(t)) return 'palacio'
-  if (/castillo|fortaleza|muralla/.test(t)) return 'castillo'
-  if (/museo/.test(t)) return 'museo'
-  if (/torre/.test(t)) return 'torre'
-  if (/puente/.test(t)) return 'puente'
-  if (/plaza/.test(t)) return 'plaza'
-  if (/jardín|parque/.test(t)) return 'jardín'
-  if (/mercado/.test(t)) return 'mercado'
-  if (/cementerio/.test(t)) return 'cementerio'
-  if (/teatro/.test(t)) return 'teatro'
-  if (/universidad/.test(t)) return 'universidad'
-  if (/fuente/.test(t)) return 'fuente'
-  const defaults: Record<RouteType, string> = {
-    imprescindibles: 'lugar imprescindible',
-    secretos_locales: 'secreto local',
-    monumental: 'monumento',
-    historia_negra: 'lugar histórico',
-    curiosidades: 'punto de interés',
-    gastronomia: 'lugar gastronómico',
-    arquitectura: 'edificio',
-    naturaleza: 'espacio natural',
-  }
-  return defaults[routeType]
+/**
+ * Matches word *stems* at the start of a word (Unicode-aware), so "kości" matches "kościół"
+ * but "war" does not match "toward". Input text is lower-cased before matching.
+ */
+function kw(stems: string[], global = false): RegExp {
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])(?:${stems.join('|')})`, global ? 'gu' : 'u')
+}
+
+const CATEGORY_STEMS: Array<[string, string[]]> = [
+  ['catedral', ['catedral', 'basílica', 'cathedral', 'basilica', 'katedr', 'bazylik', 'münster', 'basilika', 'cathédrale', 'basilique', 'duomo', 'cattedrale']],
+  ['mezquita', ['mezquita', 'mosque', 'meczet', 'moschee', 'mosquée', 'moschea']],
+  ['sinagoga', ['sinagoga', 'synagogue', 'synagog']],
+  ['convento', ['convento', 'monasterio', 'monastery', 'convent', 'abbey', 'klasztor', 'opactw', 'kloster', 'abtei', 'monastère', 'abbaye', 'monastero', 'abbazia']],
+  ['iglesia', ['iglesia', 'parroquia', 'ermita', 'capilla', 'church', 'chapel', 'kości', 'kaplic', 'cerkiew', 'kirche', 'kapelle', 'église', 'chapelle', 'chiesa', 'cappella']],
+  ['palacio', ['palacio', 'alcázar', 'alhambra', 'alcazaba', 'palace', 'pałac', 'palast', 'residenz', 'palais', 'palazzo']],
+  ['castillo', ['castillo', 'fortaleza', 'muralla', 'castle', 'fortress', 'city walls', 'zamek', 'zamk', 'twierdz', 'mury', 'burg', 'festung', 'stadtmauer', 'château', 'forteresse', 'castello', 'fortezza']],
+  ['museo', ['museo', 'museum', 'muzeum', 'musée', 'galería de arte', 'art gallery', 'pinakothek']],
+  ['ayuntamiento', ['ayuntamiento', 'casa consistorial', 'town hall', 'city hall', 'ratusz', 'rathaus', 'hôtel de ville', 'municipio']],
+  ['mercado', ['mercado', 'market', 'targ', 'hala', 'markthalle', 'marché', 'mercato']],
+  ['plaza', ['plaza', 'square', 'rynek', 'plac', 'platz', 'place', 'piazza', 'praça']],
+  ['puente', ['puente', 'bridge', 'most', 'brücke', 'pont', 'ponte']],
+  ['torre', ['torre', 'tower', 'wież', 'turm', 'tour', 'campanile']],
+  ['puerta', ['puerta', 'gate', 'brama', 'stadttor', 'porte', 'porta']],
+  ['jardín', ['jardín', 'parque', 'garden', 'park', 'ogród', 'garten', 'jardin', 'parc', 'giardino', 'parco']],
+  ['mirador', ['mirador', 'viewpoint', 'punkt widokowy', 'aussicht', 'belvédère', 'belvedere']],
+  ['cementerio', ['cementerio', 'cemetery', 'cmentarz', 'friedhof', 'cimetière', 'cimitero']],
+  ['teatro', ['teatro', 'theatre', 'theater', 'teatr', 'opera', 'ópera', 'théâtre']],
+  ['universidad', ['universidad', 'university', 'uniwersytet', 'universität', 'université', 'università', 'collegium']],
+  ['fuente', ['fuente', 'fountain', 'fontann', 'brunnen', 'fontaine', 'fontana']],
+  ['monumento', ['monumento', 'estatua', 'monument', 'statue', 'memorial', 'pomnik', 'denkmal', 'mémorial', 'statua']],
+]
+
+// Stems that are fine in a title ("Place Stanislas", "Most Karola") but ambiguous in prose
+// ("the most visited", "a place where…", "parking", "Hamburg")
+const TITLE_ONLY_STEMS = new Set(['most', 'tour', 'place', 'plac', 'hala', 'burg', 'gate', 'park', 'opera', 'collegium'])
+const TITLE_RULES: Array<[string, RegExp]> = CATEGORY_STEMS.map(([cat, stems]) => [cat, kw(stems)])
+const LEAD_RULES: Array<[string, RegExp]> = CATEGORY_STEMS.map(([cat, stems]) => [cat, kw(stems.filter(st => !TITLE_ONLY_STEMS.has(st)))])
+
+const DEFAULT_CATEGORY: Record<RouteType, string> = {
+  imprescindibles: 'lugar imprescindible',
+  secretos_locales: 'secreto local',
+  monumental: 'monumento',
+  historia_negra: 'lugar histórico',
+  curiosidades: 'punto de interés',
+  gastronomia: 'lugar gastronómico',
+  arquitectura: 'edificio',
+  naturaleza: 'espacio natural',
+}
+
+/** Category from the title first (most reliable), then from the article lead. */
+export function guessCategory(title: string, extract: string, routeType: RouteType): string {
+  const t = title.toLowerCase()
+  for (const [cat, re] of TITLE_RULES) if (re.test(t)) return cat
+  const lead = extract.slice(0, 200).toLowerCase()
+  for (const [cat, re] of LEAD_RULES) if (re.test(lead)) return cat
+  return DEFAULT_CATEGORY[routeType]
+}
+
+// ---------------------------------------------------------------------------
+// Name matching (avoids accepting the wrong article for a searched place)
+// ---------------------------------------------------------------------------
+
+const STOPWORDS = new Set([
+  'de', 'del', 'la', 'las', 'los', 'el', 'y', 'en', 'the', 'of', 'and', 'in', 'at', 'w', 'we', 'na', 'i', 'z', 'der', 'die', 'das',
+  'und', 'im', 'am', 'von', 'du', 'le', 'les', 'des', 'et', 'di', 'della', 'il', 'da', 'do', 'dos', 'das', 'san', 'santa', 'santo',
+  'saint', 'st', 'sw', 'sankt', 'ste',
+])
+const GENERIC = new Set([
+  'iglesia', 'church', 'kosciol', 'kirche', 'eglise', 'chiesa', 'plaza', 'square', 'plac', 'rynek', 'platz', 'place', 'piazza',
+  'museo', 'museum', 'muzeum', 'musee', 'calle', 'street', 'ulica', 'catedral', 'cathedral', 'katedra', 'palacio', 'palace', 'palac',
+  'castillo', 'castle', 'zamek', 'parque', 'park', 'puerta', 'gate', 'brama', 'torre', 'tower', 'mercado', 'market', 'fuente',
+  'fountain', 'convento', 'monasterio', 'ermita', 'capilla', 'chapel', 'puente', 'bridge', 'most', 'casa', 'house', 'basilica',
+  'monumento', 'monument', 'jardin', 'garden', 'mirador', 'barrio', 'teatro', 'theatre', 'mayor', 'main', 'old', 'new', 'nuevo',
+  'viejo', 'antiguo', 'real', 'royal', 'glowny', 'stary', 'nowy',
+])
+
+function normalizeName(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ł/g, 'l')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+function nameTokens(s: string): string[] {
+  return normalizeName(s).split(' ').filter(w => w.length >= 3 && !STOPWORDS.has(w))
+}
+
+/** 0..1 — share of the searched name's distinctive words present in the candidate title. */
+export function nameSimilarity(query: string, candidate: string): number {
+  const nq = normalizeName(query), nc = normalizeName(candidate)
+  if (!nq || !nc) return 0
+  if (nq.length >= 4 && (nc.includes(nq) || nq.includes(nc))) return 1
+  const q = nameTokens(query)
+  const c = new Set(nameTokens(candidate))
+  const distinctive = q.filter(w => !GENERIC.has(w))
+  const base = distinctive.length > 0 ? distinctive : q
+  if (base.length === 0) return 0
+  // Allow inflected forms (Kraków / Krakowie, Wawel / Wawelu) by matching the first 5 chars
+  const hit = (w: string) => c.has(w) || [...c].some(x => x.slice(0, 5) === w.slice(0, 5) && w.length >= 5)
+  return base.filter(hit).length / base.length
 }
 
 /** Geosearch radius derived from the city's bounding box (falls back to 5km). */
@@ -263,25 +341,38 @@ async function geosearchSingleLang(
       pageprops?: { wikibase_item?: string }
     }
     const pages: Record<string, WikiPage> = {}
+    const fetchPages = async (params: Record<string, string>) => {
+      const resp = await fetch(`${base}?${new URLSearchParams({ action: 'query', format: 'json', origin: '*', ...params })}`)
+      if (!resp.ok) return
+      const data = await resp.json() as { query?: { pages?: Record<string, WikiPage> } }
+      for (const [id, page] of Object.entries(data.query?.pages || {})) {
+        pages[id] = { ...pages[id], ...page }
+      }
+    }
+    const requests: Promise<void>[] = []
     for (let i = 0; i < geoResults.length; i += 50) {
-      const slice = geoResults.slice(i, i + 50)
-      const pageIds = slice.map(r => r.pageid).join('|')
-      const extractParams = new URLSearchParams({
-        action: 'query',
-        pageids: pageIds,
-        prop: 'extracts|pageimages|pageprops',
+      requests.push(fetchPages({
+        pageids: geoResults.slice(i, i + 50).map(r => r.pageid).join('|'),
+        prop: 'pageimages|pageprops',
         ppprop: 'wikibase_item',
+        pithumbsize: '600',
+        pilimit: '50',
+      }))
+    }
+    // TextExtracts returns at most 20 intros per request: the remaining pages of each
+    // 50-page batch came back without text and were scored on their title alone.
+    // Geosearch results are sorted by distance, so fetch intros for the nearest ones.
+    const withIntro = geoResults.slice(0, 160)
+    for (let i = 0; i < withIntro.length; i += 20) {
+      requests.push(fetchPages({
+        pageids: withIntro.slice(i, i + 20).map(r => r.pageid).join('|'),
+        prop: 'extracts',
         exintro: 'true',
         exchars: '800',
-        pithumbsize: '600',
-        format: 'json',
-        origin: '*',
-      })
-      const extractResp = await fetch(`${base}?${extractParams}`)
-      if (!extractResp.ok) continue
-      const extractData = await extractResp.json() as { query?: { pages?: Record<string, WikiPage> } }
-      Object.assign(pages, extractData.query?.pages || {})
+        exlimit: '20',
+      }))
     }
+    await Promise.all(requests.map(r => r.catch(() => undefined)))
 
     const scored: Array<POI & { _score: number; _lang: string }> = []
     for (const geoItem of geoResults) {
@@ -305,7 +396,7 @@ async function geosearchSingleLang(
         imageUrl: page?.thumbnail?.source,
         wikipediaTitle: geoItem.title,
         estimatedVisitMinutes: guessVisitMinutes(geoItem.title, extract),
-        tags: { wikiLang, ...(qid ? { wikidata: qid } : {}) },
+        tags: { wikiLang, descriptionLang: wikiLang, ...(qid ? { wikidata: qid } : {}) },
         _score: score + (extract.length > 200 ? 1 : 0),
         _lang: wikiLang,
       })
@@ -434,54 +525,49 @@ async function trySearchPOIInWiki(
   wikiLang: string
 ): Promise<POI | null> {
   const base = WIKI_API[wikiLang] || WIKI_API_BASE(wikiLang)
+  const query = (params: Record<string, string>) =>
+    fetch(`${base}?${new URLSearchParams({ action: 'query', format: 'json', origin: '*', ...params })}`)
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
 
   // Search with city name AND country for disambiguation
   // e.g. "Wawel Castle Kraków Poland" instead of just "Wawel Castle Kraków"
   const searchQuery = [name, city.name, city.country].filter(Boolean).join(' ')
-  const searchParams = new URLSearchParams({
-    action: 'query',
-    list: 'search',
-    srsearch: searchQuery,
-    srlimit: '5',
-    format: 'json',
-    origin: '*',
-  })
-
-  const searchResp = await fetch(`${base}?${searchParams}`)
-  if (!searchResp.ok) return null
-  const searchData = await searchResp.json() as { query?: { search?: Array<{ pageid: number; title: string }> } }
-  const hits = searchData.query?.search || []
+  const searchData = await query({ list: 'search', srsearch: searchQuery, srlimit: '8' }) as
+    { query?: { search?: Array<{ pageid: number; title: string }> } } | null
+  const hits = searchData?.query?.search || []
   if (hits.length === 0) return null
 
-  // Try each hit in ranking order — accept the FIRST one with valid coordinates near the city
-  for (const hit of hits) {
-    const pageParams = new URLSearchParams({
-      action: 'query',
-      pageids: String(hit.pageid),
-      prop: 'extracts|pageimages|coordinates',
-      exintro: 'true',
-      exchars: '800',
-      pithumbsize: '600',
-      colimit: '1',
-      format: 'json',
-      origin: '*',
-    })
-
-    const pageResp = await fetch(`${base}?${pageParams}`)
-    if (!pageResp.ok) continue
-    const pageData = await pageResp.json() as {
-      query?: {
-        pages?: Record<string, {
-          title?: string
-          extract?: string
-          thumbnail?: { source?: string }
-          coordinates?: Array<{ lat: number; lon: number }>
-          missing?: string
-        }>
-      }
+  // One request for all hits (was one request per hit)
+  const pageData = await query({
+    pageids: hits.map(h => h.pageid).join('|'),
+    prop: 'extracts|pageimages|coordinates',
+    exintro: 'true', exchars: '800', exlimit: '20',
+    pithumbsize: '600', pilimit: '20', colimit: 'max', coprimary: 'primary',
+  }) as {
+    query?: {
+      pages?: Record<string, {
+        title?: string
+        extract?: string
+        thumbnail?: { source?: string }
+        coordinates?: Array<{ lat: number; lon: number }>
+        missing?: string
+      }>
     }
-    const page = pageData.query?.pages?.[String(hit.pageid)]
+  } | null
+  const pages = pageData?.query?.pages || {}
+  const cityNorm = normalizeName(city.name)
+
+  // Try each hit in ranking order — accept the first one that IS the requested place
+  for (const hit of hits) {
+    const page = pages[String(hit.pageid)]
     if (!page || page.missing !== undefined) continue
+    const title = page.title || hit.title
+
+    // The search often ranks the city's own article (or a namesake) first: it lies inside
+    // the city too, so the coordinate check alone accepted it as "the place".
+    if (normalizeName(title) === cityNorm) continue
+    if (nameSimilarity(name, title) < 0.5) continue
 
     const coords = page.coordinates?.[0]
     if (!coords) continue // No coordinates — cannot validate location, skip
@@ -494,19 +580,68 @@ async function trySearchPOIInWiki(
 
     return {
       id: `wiki-${hit.pageid}`,
-      name: page.title || name,
+      name: title,
       lat: coords.lat,
       lon: coords.lon,
-      category: guessCategory(name, extract, routeType),
+      category: guessCategory(title, extract, routeType),
       routeType,
       description: extract,
       imageUrl: page.thumbnail?.source,
-      wikipediaTitle: page.title,
-      estimatedVisitMinutes: guessVisitMinutes(page.title || name, extract),
-      tags: {},
+      wikipediaTitle: title,
+      wikipediaPageId: hit.pageid,
+      estimatedVisitMinutes: guessVisitMinutes(title, extract),
+      tags: { wikiLang, descriptionLang: wikiLang },
     }
   }
   return null
+}
+
+/** Map-only places (no Wikipedia article): restaurants, small chapels, viewpoints, squares… */
+async function trySearchPOIInOSM(name: string, city: City, routeType: RouteType, lang: Language): Promise<POI | null> {
+  const place = await searchPlaceInCity(name, city, lang)
+  if (!place || nameSimilarity(name, place.name) < 0.5) return null
+
+  const tags: Record<string, string> = { ...place.extratags, source: 'osm' }
+  let description = place.extratags.description || ''
+  let imageUrl: string | undefined
+  let wikipediaTitle: string | undefined
+
+  // OSM objects often link their Wikipedia article as "lang:Title"
+  const wp = place.extratags.wikipedia?.match(/^([a-z-]{2,12}):(.+)$/)
+  if (wp) {
+    try {
+      const params = new URLSearchParams({
+        action: 'query', titles: wp[2], prop: 'extracts|pageimages', exintro: 'true',
+        exchars: '800', pithumbsize: '600', redirects: '1', format: 'json', origin: '*',
+      })
+      const resp = await fetch(`${WIKI_API_BASE(wp[1])}?${params}`)
+      const data = resp.ok ? await resp.json() as { query?: { pages?: Record<string, { title?: string; extract?: string; thumbnail?: { source?: string } }> } } : null
+      const page = Object.values(data?.query?.pages || {})[0]
+      if (page?.extract) {
+        description = cleanHtml(page.extract)
+        imageUrl = page.thumbnail?.source
+        wikipediaTitle = page.title
+        tags.wikiLang = wp[1]
+        tags.descriptionLang = wp[1]
+      }
+    } catch { /* description is optional */ }
+  }
+
+  return {
+    id: place.id,
+    name: place.name,
+    lat: place.lat,
+    lon: place.lon,
+    category: guessCategory(`${place.name} ${place.type.replace(/_/g, ' ')}`, description, routeType),
+    routeType,
+    description: description || undefined,
+    imageUrl,
+    wikipediaTitle,
+    openingHours: place.extratags.opening_hours,
+    website: place.extratags.website || place.extratags['contact:website'],
+    estimatedVisitMinutes: guessVisitMinutes(`${place.name} ${place.type}`, description),
+    tags,
+  }
 }
 
 /**
@@ -517,7 +652,9 @@ async function trySearchPOIInWiki(
  * 1. Search app-language Wikipedia with name + city + country
  * 2. If no valid near-city result, fall back to English Wikipedia
  * 3. Reject POIs whose Wikipedia coordinates are outside the city area
- *    (prevents Italian POIs appearing in Polish cities etc.)
+ *    (prevents Italian POIs appearing in Polish cities etc.) and articles that are not
+ *    about the requested place (the city itself, namesakes)
+ * 4. Fall back to OpenStreetMap (Nominatim, restricted to the city area)
  */
 export async function searchPOIByName(
   name: string,
@@ -534,7 +671,8 @@ export async function searchPOIByName(
       const poi = await trySearchPOIInWiki(name, city, routeType, wikiLang)
       if (poi) return poi
     }
-    return null
+    // Not on Wikipedia: many real stops (bars, small chapels, viewpoints) only exist on the map
+    return await trySearchPOIInOSM(name, city, routeType, lang)
   } catch (err) {
     console.error('searchPOIByName error:', err)
     return null

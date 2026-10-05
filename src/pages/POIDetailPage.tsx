@@ -5,7 +5,7 @@ import { MapView } from '../components/MapView'
 import { LoadingSpinner } from '../components/ui/LoadingSpinner'
 import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
-import { getPOIDescription, generateAudioScript } from '../services/wikipedia'
+import { getNarrationText, generateAudioScript } from '../services/wikipedia'
 import { getPOIDescription as getCachedDesc } from '../services/storage'
 
 export function POIDetailPage() {
@@ -32,8 +32,9 @@ export function POIDetailPage() {
         setLoading(false)
         return
       }
-      getPOIDescription(poi.name, language).then(desc => {
-        const d = desc || ''
+      getNarrationText(poi, language).then(facts => {
+        // The template is read aloud: skip text written in another language
+        const d = (!facts.lang || facts.lang === language ? facts.text : '') || poi.tags?.userNotes || ''
         setDescription(d)
         setAudioScript(generateAudioScript({ name: poi.name, category: poi.category, description: d || undefined }, language))
         setLoading(false)
