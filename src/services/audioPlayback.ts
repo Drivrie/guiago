@@ -28,6 +28,13 @@ let queue: PlayableChunk[] = []
 let queueIdx = 0
 let currentUrls: string[] = []   // object URLs to revoke when done
 let onEndCb: (() => void) | null = null
+let onFailCb: ((reason: string) => void) | null = null
+// Whether any chunk of the current queue actually started producing sound. Until then a
+// failure means "nothing will be heard" and is reported via onFail (the caller falls back
+// to the system voice) instead of silently skipping every chunk and ending in silence.
+let startedAny = false
+let watchdog: ReturnType<typeof setTimeout> | null = null
+const START_TIMEOUT_MS = 10000
 let playing = false
 let currentRate = 1.0
 let listenersAttached = false
@@ -51,8 +58,16 @@ function ensureAudio(): HTMLAudioElement {
     }
   })
 
+  audio.addEventListener('playing', () => {
+    if (queue.length === 0 || audio?.currentSrc === SILENT_WAV) return
+    startedAny = true
+    clearWatchdog()
+  })
+
   audio.addEventListener('error', (e) => {
     console.warn('[audioPlayback] element error:', e)
+    if (queue.length === 0) return
+    if (!startedAny) { fail('el audio no se pudo cargar'); return }
     queueIdx++
     if (queueIdx < queue.length) playCurrent()
     else {
@@ -81,15 +96,32 @@ function playCurrent(): void {
   audio.playbackRate = currentRate
   audio.play().catch(err => {
     console.warn('[audioPlayback] play() rejected:', err)
-    // iOS requires a user gesture for the FIRST play; subsequent ones in the
-    // same media session are allowed. Caller should ensure speak() is called
-    // from a click handler.
+    // AbortError = the src was replaced by the next chunk / stop(): not a failure.
+    // Anything else before the first sound (e.g. iOS NotAllowedError without a prior
+    // gesture, unsupported source) means the visitor would hear nothing.
+    if (err?.name !== 'AbortError' && !startedAny) fail(`reproducción bloqueada (${err?.name || 'error'})`)
   })
+}
+
+function clearWatchdog(): void {
+  if (watchdog) { clearTimeout(watchdog); watchdog = null }
+}
+
+/** Nothing could be played: stop and hand over to the caller's fallback. */
+function fail(reason: string): void {
+  const cb = onFailCb
+  const end = onEndCb
+  stop()
+  if (cb) cb(reason)
+  else end?.()
 }
 
 function cleanup(): void {
   playing = false
   onEndCb = null
+  onFailCb = null
+  startedAny = false
+  clearWatchdog()
   // Revoke object URLs to free memory.
   for (const u of currentUrls) URL.revokeObjectURL(u)
   currentUrls = []
@@ -173,6 +205,8 @@ export function unlock(): void {
 export interface PlayOptions {
   rate?: number
   onEnd?: () => void
+  /** Called instead of onEnd when no chunk could be played at all */
+  onFail?: (reason: string) => void
   poi?: POI
 }
 
@@ -184,9 +218,13 @@ export function play(chunks: PlayableChunk[], opts: PlayOptions = {}): void {
   queue = chunks
   queueIdx = 0
   onEndCb = opts.onEnd ?? null
+  onFailCb = opts.onFail ?? null
+  startedAny = false
   currentRate = opts.rate ?? 1.0
   if (opts.poi) setMediaSessionMetadata(opts.poi)
   playing = true
+  // A provider that never answers would otherwise leave the guide silently "playing"
+  watchdog = setTimeout(() => { if (!startedAny) fail('el audio no respondió a tiempo') }, START_TIMEOUT_MS)
   playCurrent()
 }
 

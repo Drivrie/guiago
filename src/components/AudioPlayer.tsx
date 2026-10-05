@@ -72,6 +72,11 @@ export function AudioPlayer({ text, poiName, poi, autoPlay = false, onPlayStart,
         onEnd: () => {
           setPlaying(false); setPaused(false); setAudioPlaying(false); onPlayEnd?.()
         },
+        // Neural audio could not be played at all: narrate with the system voice instead
+        onFail: () => {
+          setPlaying(false); setAudioPlaying(false)
+          playWebSpeech()
+        },
       })
     } catch (err) {
       console.warn('[AudioPlayer] neural failed:', err)

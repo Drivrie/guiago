@@ -3,6 +3,7 @@ import { useAppStore } from '../stores/appStore'
 import {
   getProvider, setProvider,
   getOpenAIKey, setOpenAIKey,
+  getPollinationsKey, setPollinationsKey,
   getVoice, setVoice,
   POLLINATIONS_VOICES, OPENAI_VOICES,
   synthesize, getLastError,
@@ -19,6 +20,7 @@ export function VoiceSettings() {
   const [provider, setLocalProvider] = useState<NeuralProviderId>(getProvider)
   const [voice, setLocalVoice] = useState(() => getVoice(lang))
   const [openaiKey, setOpenaiKeyLocal] = useState(() => getOpenAIKey())
+  const [pollinationsKey, setPollinationsKeyLocal] = useState(() => getPollinationsKey())
   const [showKey, setShowKey] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [previewError, setPreviewError] = useState(false)
@@ -58,7 +60,16 @@ export function VoiceSettings() {
     try {
       const blobs = await synthesize(sample, lang, `preview-${voice}`)
       if (blobs) {
-        audioPlayback.play(blobs, { rate: 1.0, onEnd: () => setPreviewing(false) })
+        audioPlayback.play(blobs, {
+          rate: 1.0,
+          onEnd: () => setPreviewing(false),
+          // Nothing could be played (provider down, blocked audio): show why and fall back
+          onFail: reason => {
+            setPreviewError(true)
+            setErrorDetail([getLastError(), reason].filter(Boolean).join(' · '))
+            speak(sample, es ? 'es-ES' : 'en-US', { onEnd: () => setPreviewing(false) })
+          },
+        })
         return
       }
     } catch (err) {
@@ -73,6 +84,8 @@ export function VoiceSettings() {
 
   const voices = provider === 'openai' ? OPENAI_VOICES[lang] : POLLINATIONS_VOICES[lang]
   const needsKey = provider === 'openai' && !getOpenAIKey()
+  // Without a Pollinations key the fallback (Google) has a single voice: no picker
+  const showVoicePicker = provider === 'openai' || (provider === 'pollinations' && !!pollinationsKey)
 
   return (
     <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100 space-y-4">
@@ -88,7 +101,7 @@ export function VoiceSettings() {
 
         <div className="grid grid-cols-1 gap-2">
           {([
-            { id: 'pollinations' as NeuralProviderId, name: es ? 'Neuronal gratis (recomendada)' : 'Neural free (recommended)', sub: es ? 'Sin cuenta, voces realistas, sobrevive a pantalla bloqueada' : 'No account, realistic voices, survives screen lock', badge: '✨' },
+            { id: 'pollinations' as NeuralProviderId, name: es ? 'Neuronal (recomendada)' : 'Neural (recommended)', sub: es ? 'Voces realistas con tu clave gratuita de Pollinations · sin clave, voz básica de Google · sigue con la pantalla bloqueada' : 'Realistic voices with your free Pollinations key · without a key, Google\'s basic voice · keeps playing with the screen locked', badge: '✨' },
             { id: 'openai' as NeuralProviderId, name: es ? 'OpenAI · Premium' : 'OpenAI · Premium', sub: es ? 'Calidad cinematográfica · Requiere clave propia' : 'Cinematic quality · Bring your own key', badge: '🎙️' },
             { id: 'none' as NeuralProviderId, name: es ? 'Voz del sistema (Siri)' : 'System voice (Siri)', sub: es ? 'Sin red, pero se corta al bloquear el iPhone' : 'No network, but stops when you lock the iPhone', badge: '📱' },
           ]).map(opt => (
@@ -108,6 +121,31 @@ export function VoiceSettings() {
           ))}
         </div>
       </div>
+
+      {provider === 'pollinations' && (
+        <div>
+          <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
+            {es ? 'Clave de Pollinations' : 'Pollinations key'}
+          </p>
+          <input
+            type={showKey ? 'text' : 'password'}
+            value={pollinationsKey}
+            onChange={e => setPollinationsKeyLocal(e.target.value)}
+            onBlur={() => setPollinationsKey(pollinationsKey)}
+            placeholder={es ? 'Pega aquí tu clave' : 'Paste your key here'}
+            className="w-full bg-stone-50 rounded-xl px-3 py-2 text-sm border border-stone-200 font-mono"
+          />
+          <p className="text-[11px] text-stone-400 mt-1">
+            {es
+              ? 'Pollinations ya exige una clave. Créala gratis en '
+              : 'Pollinations now requires a key. Create one for free at '}
+            <a href="https://enter.pollinations.ai" target="_blank" rel="noopener noreferrer" className="underline">enter.pollinations.ai</a>
+            {es
+              ? '. Se guarda solo en este dispositivo y también activa la IA del guía.'
+              : '. It is stored only on this device and also enables the guide\'s AI.'}
+          </p>
+        </div>
+      )}
 
       {provider === 'openai' && (
         <div>
@@ -138,18 +176,22 @@ export function VoiceSettings() {
 
       {provider !== 'none' && !needsKey && (
         <div>
-          <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
-            {es ? 'Voz' : 'Voice'}
-          </p>
-          <select
-            value={voice}
-            onChange={e => applyVoice(e.target.value)}
-            className="w-full bg-stone-50 rounded-xl px-3 py-2 text-sm border border-stone-200"
-          >
-            {voices.map(v => (
-              <option key={v.id} value={v.id}>{v.label}</option>
-            ))}
-          </select>
+          {showVoicePicker && (
+            <>
+              <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
+                {es ? 'Voz' : 'Voice'}
+              </p>
+              <select
+                value={voice}
+                onChange={e => applyVoice(e.target.value)}
+                className="w-full bg-stone-50 rounded-xl px-3 py-2 text-sm border border-stone-200"
+              >
+                {voices.map(v => (
+                  <option key={v.id} value={v.id}>{v.label}</option>
+                ))}
+              </select>
+            </>
+          )}
           <button
             onClick={preview}
             disabled={previewing}
@@ -160,8 +202,8 @@ export function VoiceSettings() {
           {previewError && (
             <div className="mt-2 text-xs text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
               <p>{es
-                ? '⚠️ La voz neuronal no respondió — has oído la voz del sistema (Siri).'
-                : '⚠️ The neural voice did not respond — you heard the system voice (Siri).'}</p>
+                ? '⚠️ La voz neuronal no se pudo reproducir — has oído la voz del sistema (Siri).'
+                : '⚠️ The neural voice could not be played — you heard the system voice (Siri).'}</p>
               {errorDetail && (
                 <p className="mt-1 font-mono text-[10px] text-amber-600 break-all">
                   {es ? 'Detalle: ' : 'Detail: '}{errorDetail}

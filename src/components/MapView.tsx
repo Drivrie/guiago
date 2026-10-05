@@ -11,6 +11,46 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 })
 
+// Keyless tile providers, in order of preference. CARTO's basemaps (used before) now show an
+// "API key required" image instead of the map, so they are no longer used.
+const TILE_PROVIDERS: Array<{ url: string; subdomains?: string; attribution: string }> = [
+  {
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  },
+  {
+    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+    subdomains: 'abc',
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · HOT · OSM France',
+  },
+]
+// Shared across map instances: once a provider fails, later maps start with the next one
+let providerIndex = 0
+
+/** Adds the tile layer and switches to the next provider if tiles keep failing to load. */
+function addTileLayer(map: L.Map): void {
+  const provider = TILE_PROVIDERS[providerIndex]
+  const layer = L.tileLayer(provider.url, {
+    maxZoom: 20,
+    maxNativeZoom: 19,
+    attribution: provider.attribution,
+    subdomains: provider.subdomains ?? 'abc',
+    crossOrigin: true,
+  })
+  let loaded = 0
+  let failed = 0
+  layer.on('tileload', () => { loaded++ })
+  layer.on('tileerror', () => {
+    failed++
+    if (loaded === 0 && failed >= 4 && providerIndex < TILE_PROVIDERS.length - 1) {
+      providerIndex++
+      map.removeLayer(layer)
+      addTileLayer(map)
+    }
+  })
+  layer.addTo(map)
+}
+
 interface MapViewProps {
   pois: POI[]
   route?: Route | null
@@ -53,12 +93,7 @@ export function MapView({
       attributionControl: false,
     })
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20,
-      attribution:
-        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: 'abcd',
-    }).addTo(map)
+    addTileLayer(map)
 
     L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map)
     L.control.zoom({ position: 'topright' }).addTo(map)

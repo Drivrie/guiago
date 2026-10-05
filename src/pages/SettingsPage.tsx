@@ -5,6 +5,7 @@ import { Button } from '../components/ui/Button'
 import { UpdateChecker } from '../components/UpdateChecker'
 import { VoiceSettings } from '../components/VoiceSettings'
 import { validateApiKey, hasBuiltInKey, activeEngine } from '../services/ai'
+import { getPollinationsKey } from '../services/neuralTTS'
 import {
   LOCAL_MODELS, type LocalModelId,
   getActiveLocalModel, setActiveLocalModel,
@@ -184,7 +185,9 @@ export function SettingsPage() {
                   ? (es ? 'Usando tu clave Mistral AI' : 'Using your Mistral AI key')
                   : engine === 'mistral_builtin'
                   ? (es ? 'Usando Mistral AI integrado' : 'Using built-in Mistral AI')
-                  : (es ? 'IA gratuita activa — sin configurar nada' : 'Free AI active — no setup needed')}
+                  : getPollinationsKey()
+                  ? (es ? 'IA activa con tu clave de Pollinations' : 'AI active with your Pollinations key')
+                  : (es ? '⚠️ IA sin configurar — añade una clave gratuita' : '⚠️ AI not set up — add a free key')}
               </p>
             </div>
             <ul className={`text-sm space-y-1 ml-9 ${
@@ -197,7 +200,11 @@ export function SettingsPage() {
               <li>• {engine === 'local'
                 ? (es ? `Motor: ${LOCAL_MODELS.find(m => m.id === activeLocalModel)?.name ?? 'modelo local'} · 100% offline` : `Engine: ${LOCAL_MODELS.find(m => m.id === activeLocalModel)?.name ?? 'local model'} · 100% offline`)
                 : engine === 'pollinations'
-                ? (es ? 'Motor: Pollinations.ai (GPT-4o-mini gratuito, sin cuenta)' : 'Engine: Pollinations.ai (free GPT-4o-mini, no account)')
+                ? (getPollinationsKey()
+                  ? (es ? 'Motor: Pollinations.ai con tu clave' : 'Engine: Pollinations.ai with your key')
+                  : (es
+                    ? 'Pollinations ya exige clave: sin ella las rutas y narraciones usan Wikipedia y plantillas. Añade abajo una clave gratuita de Mistral, o una de Pollinations en «Voz del guía».'
+                    : 'Pollinations now requires a key: without one, routes and narrations use Wikipedia and templates. Add a free Mistral key below, or a Pollinations key under "Guide voice".'))
                 : (es ? 'Motor: Mistral AI open-mistral-nemo · máxima fiabilidad' : 'Engine: Mistral AI open-mistral-nemo · maximum reliability')
               }</li>
             </ul>

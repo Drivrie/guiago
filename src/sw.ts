@@ -28,7 +28,8 @@ self.addEventListener('activate', (event: ExtendableEvent) => {
 self.addEventListener('fetch', (event: FetchEvent) => {
   const url = new URL(event.request.url)
 
-  if (url.hostname.includes('tile.openstreetmap.org')) {
+  // Map tiles (tile.openstreetmap.org and the OSM France fallback): cache-first for offline use
+  if (url.hostname.includes('tile.openstreetmap.')) {
     event.respondWith(
       caches.open(TILE_CACHE).then(cache =>
         cache.match(event.request).then(cached => {
