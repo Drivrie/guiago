@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { HomePage } from './pages/HomePage'
 import { RouteSetupPage } from './pages/RouteSetupPage'
 import { RoutePreviewPage } from './pages/RoutePreviewPage'
@@ -8,6 +8,7 @@ import { POIDetailPage } from './pages/POIDetailPage'
 import { OfflineRoutesPage } from './pages/OfflineRoutesPage'
 import { TodayPage } from './pages/TodayPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { ImportRoutePage } from './pages/ImportRoutePage'
 import { useAppStore } from './stores/appStore'
 import { Chatbot } from './components/Chatbot'
 
@@ -15,6 +16,9 @@ import { Chatbot } from './components/Chatbot'
 export default function App() {
   const { isOffline, setOffline, language } = useAppStore()
   const [showChatbot, setShowChatbot] = useState(false)
+  // The floating chat bubble covers the big bottom action buttons on these screens
+  const { pathname } = useLocation()
+  const hideChatbot = pathname.startsWith('/route/') || pathname.startsWith('/import')
 
   // Track network changes app-wide
   useEffect(() => {
@@ -44,6 +48,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/today" element={<TodayPage />} />
+        <Route path="/import" element={<ImportRoutePage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/city/:cityName" element={<RouteSetupPage />} />
         <Route path="/route/preview" element={<RoutePreviewPage />} />
@@ -54,11 +59,11 @@ export default function App() {
       </Routes>
 
       {/* Chatbot button */}
-      <div className="chatbot-container" onClick={() => setShowChatbot(!showChatbot)}>
+      {!hideChatbot && <div className="chatbot-container" onClick={() => setShowChatbot(!showChatbot)}>
         <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
         </svg>
-      </div>
+      </div>}
 
       {/* Chatbot modal */}
       {showChatbot && <Chatbot onClose={() => setShowChatbot(false)} />}

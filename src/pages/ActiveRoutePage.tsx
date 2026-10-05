@@ -8,7 +8,7 @@ import { BottomSheet } from '../components/ui/BottomSheet'
 import { Button } from '../components/ui/Button'
 import { useAppStore } from '../stores/appStore'
 import { buildNarration, prefetchNarration } from '../services/narration'
-import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction } from '../services/routing'
+import { getRoute, getStepByStepInstructions, orderPOIsOptimally, calculateDistance, getDirectRoute, buildVoiceInstruction, buildRouteSegments } from '../services/routing'
 import { speak, stop as stopTTS } from '../services/tts'
 import { startKeepAlive, stopKeepAlive, setKeepAliveMetadata } from '../services/backgroundKeepAlive'
 import { unlock as unlockAudio, setNavigationHandlers } from '../services/audioPlayback'
@@ -34,10 +34,20 @@ type NavMode = 'app' | 'external'
 // back) so "Continuar guiado" can restore the tour in the same mode.
 let lastNavMode: NavMode | null = null
 
-function fallbackSegment(from: POI, to: POI): RouteSegment {
-  const direct = getDirectRoute(from, to)
-  const steps = getStepByStepInstructions(direct)
-  return { from, to, steps, distance: direct.distance, duration: direct.duration, geometry: [[from.lon, from.lat], [to.lon, to.lat]] }
+/**
+ * Stop order for a tour starting at (lat, lon). Generated routes are re-optimised from the
+ * start point; routes whose order was chosen by the visitor (preview reordering) or by a
+ * pasted itinerary keep it — rotated only when the visitor starts AT one of the stops.
+ */
+function orderForStart(pois: POI[], lat: number, lon: number, preserveOrder?: boolean): POI[] {
+  if (!preserveOrder) return orderPOIsOptimally([...pois], lat, lon)
+  if (pois.length <= 1) return [...pois]
+  let best = 0
+  pois.forEach((p, i) => {
+    if (calculateDistance(lat, lon, p.lat, p.lon) < calculateDistance(lat, lon, pois[best].lat, pois[best].lon)) best = i
+  })
+  if (calculateDistance(lat, lon, pois[best].lat, pois[best].lon) > 30) return [...pois]
+  return [...pois.slice(best), ...pois.slice(0, best)]
 }
 
 /** Deep links to navigate (walking) from an optional origin to a destination POI. */
@@ -346,7 +356,7 @@ export function ActiveRoutePage() {
     // is allowed by iOS even though it starts after async fetches.
     unlockAudio()
     setRebuilding(true)
-    const orderedPOIs = orderPOIsOptimally([...pois], startLat, startLon)
+    const orderedPOIs = orderForStart(pois, startLat, startLon, currentRoute.preserveOrder)
 
     // Build pre-route: from user start position → first POI
     const firstPOI = orderedPOIs[0]
@@ -355,7 +365,7 @@ export function ActiveRoutePage() {
     if (distToFirst > 50) {
       try {
         const result = await getRoute([[startLat, startLon], [firstPOI.lat, firstPOI.lon]], language)
-        const routeData = result ?? getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
+        const routeData = result ?? getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon }, language)
         preRoute = {
           from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
           to: firstPOI,
@@ -365,7 +375,7 @@ export function ActiveRoutePage() {
           geometry: routeData.geometry.coordinates,
         }
       } catch {
-        const direct = getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon })
+        const direct = getDirectRoute({ lat: startLat, lon: startLon }, { lat: firstPOI.lat, lon: firstPOI.lon }, language)
         preRoute = {
           from: { id: 'user-start', name: language === 'es' ? 'Tu ubicación' : 'Your location', lat: startLat, lon: startLon, category: 'start', routeType: currentRoute.routeType },
           to: firstPOI,
@@ -376,30 +386,10 @@ export function ActiveRoutePage() {
       }
     }
 
-    // Build segments between consecutive POIs
-    const segments: RouteSegment[] = []
-    for (let i = 0; i < orderedPOIs.length - 1; i++) {
-      try {
-        const result = await getRoute([
-          [orderedPOIs[i].lat, orderedPOIs[i].lon],
-          [orderedPOIs[i + 1].lat, orderedPOIs[i + 1].lon]
-        ], language)
-        if (result) {
-          segments.push({
-            from: orderedPOIs[i], to: orderedPOIs[i + 1],
-            steps: getStepByStepInstructions(result),
-            distance: result.distance, duration: result.duration,
-            geometry: result.geometry.coordinates
-          })
-        } else {
-          segments.push(fallbackSegment(orderedPOIs[i], orderedPOIs[i + 1]))
-        }
-      } catch {
-        segments.push(fallbackSegment(orderedPOIs[i], orderedPOIs[i + 1]))
-      }
-    }
+    // Segments between consecutive POIs (one routing request for the whole route)
+    const { segments, totalDistance, totalDuration } = await buildRouteSegments(orderedPOIs, language)
     setPOIs(orderedPOIs)
-    setRoute({ ...currentRoute, pois: orderedPOIs, segments })
+    setRoute({ ...currentRoute, pois: orderedPOIs, segments, totalDistance, totalDuration })
     setCurrentPOIIndex(0)
     setCurrentStepIndex(0)
     lastSpokenStepRef.current = -1
@@ -420,7 +410,7 @@ export function ActiveRoutePage() {
     const start = userLocation
       ? { lat: userLocation[0], lon: userLocation[1] }
       : { lat: currentRoute.city.lat, lon: currentRoute.city.lon }
-    const ordered = orderPOIsOptimally([...pois], start.lat, start.lon)
+    const ordered = orderForStart(pois, start.lat, start.lon, currentRoute.preserveOrder)
     setPOIs(ordered)
     // Clear segments: in external mode GuiAgo doesn't draw an in-app walking
     // line (the user navigates with their own maps app). Totals are preserved.
@@ -551,7 +541,7 @@ export function ActiveRoutePage() {
           </button>
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold text-sm truncate">
-              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute.city.name}
+              {currentRoute.title || (routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : '')} — {currentRoute.city.name}
             </p>
             <p className="text-stone-400 text-xs">
               {pois.length} {language === 'es' ? 'paradas' : 'stops'}
@@ -658,7 +648,7 @@ export function ActiveRoutePage() {
           </button>
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold truncate">
-              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute.city.name}
+              {currentRoute.title || (routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : '')} — {currentRoute.city.name}
             </p>
             <p className="text-stone-400 text-xs">
               {pois.length} {language === 'es' ? 'paradas · navegación externa' : 'stops · external navigation'}
@@ -791,7 +781,7 @@ export function ActiveRoutePage() {
           </button>
           <div className="flex-1 min-w-0">
             <p className="text-white font-bold truncate">
-              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute?.city.name}
+              {currentRoute?.title || (routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : '')} — {currentRoute?.city.name}
             </p>
             <p className="text-stone-400 text-xs">
               {pois.length} {language === 'es' ? 'paradas' : 'stops'}
@@ -911,7 +901,8 @@ export function ActiveRoutePage() {
           calculateDistance(userLocation[0], userLocation[1], b.lat, b.lon)
         )
       : pois
-    const nearestPOI = sortedByDistance[0]
+    // Tours with a chosen order start at their first stop; generated ones at the closest
+    const nearestPOI = currentRoute.preserveOrder ? pois[0] : sortedByDistance[0]
     const distToNearest = userLocation && nearestPOI
       ? Math.round(calculateDistance(userLocation[0], userLocation[1], nearestPOI.lat, nearestPOI.lon))
       : null
@@ -930,7 +921,7 @@ export function ActiveRoutePage() {
           </button>
           <div className="flex-1">
             <p className="text-white font-bold text-sm truncate">
-              {routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : ''} — {currentRoute.city.name}
+              {currentRoute.title || (routeInfo ? (language === 'es' ? routeInfo.labelEs : routeInfo.labelEn) : '')} — {currentRoute.city.name}
             </p>
             <p className="text-stone-400 text-xs">
               {pois.length} {language === 'es' ? 'paradas' : 'stops'}

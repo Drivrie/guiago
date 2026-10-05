@@ -197,6 +197,82 @@ export async function getPOIDescription(name: string, lang: Language = 'es'): Pr
   }
 }
 
+/** Intro of an article by its exact title (follows redirects; never guesses another article). */
+async function fetchExactIntro(title: string, wikiLang: string): Promise<string> {
+  try {
+    const params = new URLSearchParams({
+      action: 'query', titles: title, prop: 'extracts', exintro: 'true', exchars: '6000',
+      redirects: '1', format: 'json', origin: '*',
+    })
+    const resp = await fetch(`https://${wikiLang}.wikipedia.org/w/api.php?${params}`)
+    if (!resp.ok) return ''
+    const data: WikiApiResponse = await resp.json()
+    const page = Object.values(data?.query?.pages || {})[0]
+    if (!page || page.missing !== undefined) return ''
+    return cleanWikiExtract(page.extract || '')
+  } catch {
+    return ''
+  }
+}
+
+/** Title of the same article in another language edition (interlanguage link), if any. */
+async function translatedTitle(title: string, fromLang: string, toLang: string): Promise<string | null> {
+  try {
+    const params = new URLSearchParams({
+      action: 'query', titles: title, prop: 'langlinks', lllang: toLang, redirects: '1', format: 'json', origin: '*',
+    })
+    const resp = await fetch(`https://${fromLang}.wikipedia.org/w/api.php?${params}`)
+    if (!resp.ok) return null
+    const data = await resp.json() as { query?: { pages?: Record<string, { langlinks?: Array<{ '*'?: string }> }> } }
+    const page = Object.values(data?.query?.pages || {})[0]
+    return page?.langlinks?.[0]?.['*'] || null
+  } catch {
+    return null
+  }
+}
+
+export interface NarrationText {
+  text: string
+  /** Language the text is written in ('' when unknown) */
+  lang: string
+}
+
+/**
+ * Facts to narrate a POI, tied to THIS exact place:
+ *  1. the article the POI came from, in the app language when an interlanguage link exists
+ *     (POIs found in the local Wikipedia carry Polish/German/… text otherwise);
+ *  2. the POI's own description (whatever its language — the AI narrator translates);
+ *  3. for map-only POIs, a Wikipedia article located within a few hundred metres whose
+ *     title matches.
+ * Never a global search by name, which returned famous namesakes in other cities.
+ */
+export async function getNarrationText(
+  poi: { name: string; lat: number; lon: number; description?: string; wikipediaTitle?: string; tags?: Record<string, string> },
+  lang: Language
+): Promise<NarrationText> {
+  const tags = poi.tags || {}
+  const osmWiki = tags.wikipedia?.match(/^([a-z-]{2,12}):(.+)$/)
+  const sourceLang = tags.descriptionLang || tags.wikiLang || osmWiki?.[1] || ''
+  const sourceTitle = poi.wikipediaTitle || osmWiki?.[2]
+
+  if (poi.description && (!sourceLang || sourceLang === lang)) {
+    return { text: poi.description, lang: sourceLang || lang }
+  }
+  if (sourceTitle && sourceLang && sourceLang !== lang) {
+    const appTitle = await translatedTitle(sourceTitle, sourceLang, lang)
+    const text = appTitle ? await fetchExactIntro(appTitle, lang) : ''
+    if (text) return { text, lang }
+  }
+  if (poi.description) return { text: poi.description, lang: sourceLang }
+  if (sourceTitle && sourceLang) {
+    const text = await fetchExactIntro(sourceTitle, sourceLang)
+    if (text) return { text, lang: sourceLang }
+  }
+  const nearby = await searchPOIByGeo(poi.name, lang, poi.lat, poi.lon, 400)
+  if (nearby?.extract) return { text: nearby.extract, lang }
+  return { text: '', lang: '' }
+}
+
 export async function getPOIInfo(name: string, lang: Language = 'es'): Promise<WikiResult | null> {
   return fetchPOIFromMediaWiki(
     name, lang,
@@ -391,6 +467,8 @@ async function searchPOIByGeo(
       const distM = haversineMeters(lat, lon, coords.lat, coords.lon)
       if (distM > radiusMeters) continue
       const sim = titleSimilarity(name, page.title || '')
+      // A nearby article whose title shares nothing with the query is another place
+      if (sim === 0) continue
       const proximity = Math.max(0, 1 - distM / radiusMeters)
       const combined = sim * 100 + proximity * 20
       candidates.push({ combined, page })

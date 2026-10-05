@@ -346,7 +346,8 @@ export async function getPOIsByCity(city: City, routeType: RouteType, maxDuratio
         openingHours: tags.opening_hours,
         website: tags.website || tags['contact:website'],
         phone: tags.phone || tags['contact:phone'],
-        wikipediaTitle: tags['wikipedia'] ? extractWikiTitle(tags['wikipedia']) : name
+        // Only a real linked article: guessing the POI name as a title fetched namesakes elsewhere
+        wikipediaTitle: tags['wikipedia'] ? extractWikiTitle(tags['wikipedia']) : undefined
       }
 
       processedPOIs.push(poi)

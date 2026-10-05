@@ -233,6 +233,29 @@ export function HomePage() {
           </svg>
         </button>
 
+        {/* Paste a free-text itinerary */}
+        <button
+          onClick={() => navigate('/import')}
+          className="w-full bg-white rounded-2xl p-4 mb-5 flex items-center gap-4 shadow-sm border border-orange-100 active:scale-[0.98] transition-transform"
+        >
+          <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center flex-shrink-0">
+            <span className="text-2xl">📝</span>
+          </div>
+          <div className="flex-1 text-left">
+            <p className="text-stone-900 font-black text-base">
+              {language === 'es' ? 'Pegar un recorrido' : 'Paste an itinerary'}
+            </p>
+            <p className="text-stone-500 text-xs mt-0.5">
+              {language === 'es'
+                ? 'De un blog, una guía o tus notas → ruta guiada'
+                : 'From a blog, a guide or your notes → guided route'}
+            </p>
+          </div>
+          <svg className="w-5 h-5 text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+
         {/* Search */}
         <div className="mb-2">
           <h2 className="text-xl font-bold text-stone-800 mb-3">

@@ -1,6 +1,15 @@
-import type { RouteResult, NavigationStep, POI } from '../types'
+import type { RouteResult, NavigationStep, POI, RouteSegment } from '../types'
 
-const OSRM_BASE = 'https://router.project-osrm.org/route/v1/foot'
+// The public project-osrm.org demo only serves the car profile (it ignores "/foot"): it follows
+// one-way streets and returns driving times. FOSSGIS runs a real pedestrian profile.
+const OSRM_BASES = [
+  'https://routing.openstreetmap.de/routed-foot/route/v1/foot',
+  'https://router.project-osrm.org/route/v1/foot',
+]
+
+// Average walking speed (~4.9 km/h). Durations are derived from distance so they stay
+// realistic even when we fall back to the car-only demo server.
+const WALK_SPEED_MS = 1.35
 
 // OSRM maneuver type to direction mapping
 function maneuverToDirection(type: string, modifier?: string): NavigationStep['direction'] {
@@ -111,76 +120,71 @@ function buildInstructionEs(type: string, modifier?: string, streetName?: string
 export async function getRoute(waypoints: [number, number][], lang: 'es' | 'en' = 'es'): Promise<RouteResult | null> {
   if (waypoints.length < 2) return null
 
+  // OSRM expects lon,lat pairs
+  const coords = waypoints.map(([lat, lon]) => `${lon},${lat}`).join(';')
+  for (const base of OSRM_BASES) {
+    const route = await fetchOSRMRoute(`${base}/${coords}?steps=true&geometries=geojson&overview=full&annotations=false`)
+    if (route) return parseOSRMRoute(route, lang)
+  }
+  return null
+}
+
+interface OSRMRoute {
+  distance: number
+  geometry: RouteResult['geometry']
+  legs: Array<{
+    distance: number
+    steps: Array<{
+      distance: number
+      maneuver: { type: string; modifier?: string; location?: [number, number] }
+      name?: string
+      geometry?: { coordinates: [number, number][] }
+    }>
+  }>
+}
+
+async function fetchOSRMRoute(url: string): Promise<OSRMRoute | null> {
   try {
-    // OSRM expects lon,lat pairs
-    const coords = waypoints.map(([lat, lon]) => `${lon},${lat}`).join(';')
-    const url = `${OSRM_BASE}/${coords}?steps=true&geometries=geojson&overview=full&annotations=false`
-
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 8000)
+    const timeout = setTimeout(() => controller.abort(), 10000)
     const response = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout))
-    if (!response.ok) {
-      throw new Error(`OSRM error: ${response.status}`)
-    }
-
+    if (!response.ok) throw new Error(`OSRM error: ${response.status}`)
     const data = await response.json()
-
     if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
       throw new Error('OSRM returned no routes')
     }
-
-    const route = data.routes[0]
-
-    // Parse legs/steps into our format
-    const legs = route.legs.map((leg: {
-      distance: number
-      duration: number
-      steps: Array<{
-        distance: number
-        duration: number
-        maneuver: { type: string; modifier?: string; location?: [number, number] }
-        name?: string
-        geometry?: { coordinates: [number, number][] }
-      }>
-    }) => ({
-      distance: {
-        value: leg.distance,
-        text: formatDistance(leg.distance)
-      },
-      duration: {
-        value: leg.duration,
-        text: formatDuration(leg.duration)
-      },
-      steps: leg.steps.map((step) => ({
-        distance: {
-          value: step.distance,
-          text: formatDistance(step.distance)
-        },
-        duration: {
-          value: step.duration,
-          text: formatDuration(step.duration)
-        },
-        instruction: lang === 'en'
-          ? buildInstructionEn(step.maneuver.type, step.maneuver.modifier, step.name)
-          : buildInstructionEs(step.maneuver.type, step.maneuver.modifier, step.name),
-        maneuver: step.maneuver ? {
-          type: step.maneuver.type,
-          modifier: step.maneuver.modifier,
-          location: step.maneuver.location
-        } : undefined,
-        geometry: step.geometry
-      }))
-    }))
-
-    return {
-      distance: route.distance,
-      duration: route.duration,
-      geometry: route.geometry,
-      legs
-    }
+    return data.routes[0] as OSRMRoute
   } catch (error) {
-    console.error('OSRM routing error:', error)
+    console.warn('OSRM routing error:', url.split('/route/')[0], error)
     return null
+  }
+}
+
+function parseOSRMRoute(route: OSRMRoute, lang: 'es' | 'en'): RouteResult {
+  const walk = (meters: number) => meters / WALK_SPEED_MS
+  const legs = route.legs.map(leg => ({
+    distance: { value: leg.distance, text: formatDistance(leg.distance) },
+    duration: { value: walk(leg.distance), text: formatDuration(walk(leg.distance)) },
+    steps: leg.steps.map(step => ({
+      distance: { value: step.distance, text: formatDistance(step.distance) },
+      duration: { value: walk(step.distance), text: formatDuration(walk(step.distance)) },
+      instruction: lang === 'en'
+        ? buildInstructionEn(step.maneuver.type, step.maneuver.modifier, step.name)
+        : buildInstructionEs(step.maneuver.type, step.maneuver.modifier, step.name),
+      maneuver: step.maneuver ? {
+        type: step.maneuver.type,
+        modifier: step.maneuver.modifier,
+        location: step.maneuver.location
+      } : undefined,
+      geometry: step.geometry
+    }))
+  }))
+
+  return {
+    distance: route.distance,
+    duration: walk(route.distance),
+    geometry: route.geometry,
+    legs
   }
 }
 
@@ -208,7 +212,11 @@ export function getStepByStepInstructions(routeResult: RouteResult): NavigationS
 }
 
 /** Creates a simple direct navigation segment when OSRM routing fails */
-export function getDirectRoute(from: { lat: number; lon: number }, to: { lat: number; lon: number }): RouteResult {
+export function getDirectRoute(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+  lang: 'es' | 'en' = 'es'
+): RouteResult {
   const dist = calculateDistance(from.lat, from.lon, to.lat, to.lon)
 
   // Calculate bearing for direction arrow
@@ -229,20 +237,21 @@ export function getDirectRoute(from: { lat: number; lon: number }, to: { lat: nu
   else if (bearingDeg <= 292.5) direction = 'left'                           // W
   else direction = 'slight_left'                                             // NW
 
-  const instruction = `Dirígete ${dist > 500 ? `${(dist/1000).toFixed(1)} km` : `${Math.round(dist)} m`} hacia el destino`
+  const distText = dist > 500 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`
+  const instruction = lang === 'en' ? `Head ${distText} towards the destination` : `Dirígete ${distText} hacia el destino`
   const icon = direction === 'left' ? '↰' : direction === 'right' ? '↱' : '↑'
 
   void icon // used indirectly via maneuver modifier in getStepByStepInstructions
   return {
     distance: dist,
-    duration: dist / 1.4,
+    duration: dist / WALK_SPEED_MS,
     geometry: { type: 'LineString', coordinates: [[from.lon, from.lat], [to.lon, to.lat]] },
     legs: [{
       distance: { value: dist, text: formatDistance(dist) },
-      duration: { value: dist / 1.4, text: `${Math.round(dist / 84)} min` },
+      duration: { value: dist / WALK_SPEED_MS, text: formatDuration(dist / WALK_SPEED_MS) },
       steps: [{
         distance: { value: dist, text: formatDistance(dist) },
-        duration: { value: dist / 1.4, text: `${Math.round(dist / 84)} min` },
+        duration: { value: dist / WALK_SPEED_MS, text: formatDuration(dist / WALK_SPEED_MS) },
         instruction,
         maneuver: { type: 'depart', modifier: direction, location: [from.lon, from.lat] as [number, number] },
         geometry: undefined,
@@ -480,4 +489,60 @@ export function pruneOutlierPOIs<T extends { lat: number; lon: number }>(
     }
   }
   return result
+}
+
+export interface BuiltSegments {
+  segments: RouteSegment[]
+  totalDistance: number
+  totalDuration: number
+}
+
+function segmentFrom(from: POI, to: POI, result: RouteResult): RouteSegment {
+  return {
+    from, to,
+    steps: getStepByStepInstructions(result),
+    distance: result.distance,
+    duration: result.duration,
+    geometry: result.geometry.coordinates,
+  }
+}
+
+/**
+ * Walking segments between consecutive POIs, in the given order. One multi-waypoint
+ * routing request for the whole route (instead of one per leg, which the public servers
+ * rate-limit), then per-leg requests, then straight-line compass segments.
+ */
+export async function buildRouteSegments(pois: POI[], lang: 'es' | 'en' = 'es'): Promise<BuiltSegments> {
+  const segments: RouteSegment[] = []
+  if (pois.length < 2) return { segments, totalDistance: 0, totalDuration: 0 }
+
+  const full = pois.length <= 25 ? await getRoute(pois.map(p => [p.lat, p.lon]), lang) : null
+  if (full && full.legs.length === pois.length - 1) {
+    full.legs.forEach((leg, i) => {
+      const coordinates = leg.steps.flatMap(s => s.geometry?.coordinates ?? [])
+      segments.push(segmentFrom(pois[i], pois[i + 1], {
+        distance: leg.distance.value,
+        duration: leg.duration.value,
+        geometry: {
+          type: 'LineString',
+          coordinates: coordinates.length >= 2
+            ? coordinates
+            : [[pois[i].lon, pois[i].lat], [pois[i + 1].lon, pois[i + 1].lat]],
+        },
+        legs: [leg],
+      }))
+    })
+  } else {
+    for (let i = 0; i < pois.length - 1; i++) {
+      const from = pois[i], to = pois[i + 1]
+      const result = await getRoute([[from.lat, from.lon], [to.lat, to.lon]], lang)
+      segments.push(segmentFrom(from, to, result ?? getDirectRoute(from, to, lang)))
+    }
+  }
+
+  return {
+    segments,
+    totalDistance: segments.reduce((sum, s) => sum + s.distance, 0),
+    totalDuration: segments.reduce((sum, s) => sum + s.duration, 0),
+  }
 }

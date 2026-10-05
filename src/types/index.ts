@@ -80,6 +80,10 @@ export interface Route {
   isOffline?: boolean
   offlineDownloadedAt?: string
   story?: string
+  /** Custom title (routes imported from free text) — shown instead of the route type label */
+  title?: string
+  /** Keep the stop order chosen by the user / the pasted text instead of re-optimising it */
+  preserveOrder?: boolean
 }
 
 export interface AudioGuide {
